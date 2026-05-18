@@ -77,7 +77,7 @@ export class NetworkInterceptor {
       this.onWebSocketFrame(params, 'WS_SEND');
     });
 
-    console.log('[NetworkInterceptor] 已启动');
+    console.error('[NetworkInterceptor] 已启动');
   }
 
   onRequest(params) {

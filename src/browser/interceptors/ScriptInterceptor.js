@@ -35,7 +35,7 @@ export class ScriptInterceptor {
       this.onScriptParsed(params);
     });
 
-    console.log('[ScriptInterceptor] 已启动');
+    console.error('[ScriptInterceptor] 已启动');
   }
 
   async onScriptParsed(params) {

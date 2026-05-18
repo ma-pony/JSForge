@@ -6,7 +6,7 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { writeFile, readFile, rm } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve, sep } from 'path';
 import { createHash } from 'crypto';
 import { PATHS, ensureDir } from '../config/paths.js';
 
@@ -44,12 +44,25 @@ function scriptHash(url, source) {
 }
 
 /**
+ * 主机名 → 安全目录名：仅允许 hostname 合法字符，禁止 . / .. 等遍历语义
+ */
+function sanitizeHostname(host) {
+  const cleaned = String(host || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9.\-]/g, '_')   // 仅保留 hostname 合法字符
+    .replace(/\.{2,}/g, '_')          // 防 ".." 遍历
+    .replace(/^[._-]+|[._-]+$/g, '')  // 移除首尾标点
+    .slice(0, 253);                   // RFC 1035 hostname 上限
+  return cleaned || '_unknown';
+}
+
+/**
  * 从 URL 提取站点和路径
  */
 function parseUrl(url) {
   try {
     const u = new URL(url);
-    const site = u.hostname;
+    const site = sanitizeHostname(u.hostname);
     // 路径转为安全的目录名
     const path = u.pathname.replace(/\//g, '_').replace(/^_/, '') || '_root';
     return { site, path };
@@ -210,7 +223,7 @@ export class DataStore {
    */
   startSession() {
     this.sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    console.log(`[DataStore] 新会话: ${this.sessionId}`);
+    console.error(`[DataStore] 新会话: ${this.sessionId}`);
     return this.sessionId;
   }
 
@@ -245,9 +258,17 @@ export class DataStore {
 
   /**
    * 获取站点目录
+   * Defense-in-depth: sanitize 后再做容器化校验，防止任何上游遗漏导致越界写入
    */
   getSiteDir(site) {
-    return join(SITES_DIR, site);
+    const safe = sanitizeHostname(site);
+    const dir = join(SITES_DIR, safe);
+    const baseResolved = resolve(SITES_DIR);
+    const dirResolved = resolve(dir);
+    if (dirResolved !== baseResolved && !dirResolved.startsWith(baseResolved + sep)) {
+      throw new Error(`Invalid site name (path escape): ${site}`);
+    }
+    return dir;
   }
 
   /**
@@ -753,7 +774,7 @@ export class DataStore {
    * 执行清理
    */
   async cleanup() {
-    console.log('[DataStore] 开始清理过期数据...');
+    console.error('[DataStore] 开始清理过期数据...');
     const now = Date.now();
     let totalCleaned = 0;
 
@@ -767,7 +788,7 @@ export class DataStore {
     totalCleaned += await this.cleanupTotalSize();
 
     if (totalCleaned > 0) {
-      console.log(`[DataStore] 清理完成，删除 ${totalCleaned} 条记录`);
+      console.error(`[DataStore] 清理完成，删除 ${totalCleaned} 条记录`);
     }
   }
 
@@ -900,7 +921,7 @@ export class DataStore {
       await this.clearSite(oldest.hostname);
       totalSize -= oldest.size;
       cleaned++;
-      console.log(`[DataStore] 清理站点: ${oldest.hostname}`);
+      console.error(`[DataStore] 清理站点: ${oldest.hostname}`);
     }
 
     return cleaned;

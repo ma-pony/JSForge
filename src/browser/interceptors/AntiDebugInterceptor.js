@@ -58,11 +58,11 @@ export class AntiDebugInterceptor {
 
       // 触发风暴模式
       if (this.pausedCount > this.PAUSED_THRESHOLD) {
-        console.log('[AntiDebugInterceptor] 检测到 debugger 风暴，启用风暴模式');
+        console.error('[AntiDebugInterceptor] 检测到 debugger 风暴，启用风暴模式');
         this.stormMode = true;
         if (this.stormTimer) clearTimeout(this.stormTimer);
         this.stormTimer = setTimeout(() => {
-          console.log('[AntiDebugInterceptor] 退出风暴模式');
+          console.error('[AntiDebugInterceptor] 退出风暴模式');
           this.stormMode = false;
           this.pausedCount = 0;
           this.stormTimer = null;
@@ -73,7 +73,7 @@ export class AntiDebugInterceptor {
       this.client.send('Debugger.resume').catch(() => {});
     });
 
-    console.log('[AntiDebugInterceptor] 已启动 (skipAllPauses)');
+    console.error('[AntiDebugInterceptor] 已启动 (skipAllPauses)');
   }
 
   /**
@@ -84,7 +84,7 @@ export class AntiDebugInterceptor {
     if (!this._skipAll) return;
     this._skipAll = false;
     await this.client.send('Debugger.setSkipAllPauses', { skip: false });
-    console.log('[AntiDebugInterceptor] 已启用断点暂停');
+    console.error('[AntiDebugInterceptor] 已启用断点暂停');
   }
 
   /**
@@ -94,7 +94,7 @@ export class AntiDebugInterceptor {
     if (this._skipAll) return;
     this._skipAll = true;
     await this.client.send('Debugger.setSkipAllPauses', { skip: true });
-    console.log('[AntiDebugInterceptor] 已禁用断点暂停');
+    console.error('[AntiDebugInterceptor] 已禁用断点暂停');
   }
 
   /**
@@ -138,15 +138,15 @@ export class AntiDebugInterceptor {
 
     this.stormMode = enabled;
     if (enabled) {
-      console.log('[AntiDebugInterceptor] 手动启用风暴模式');
+      console.error('[AntiDebugInterceptor] 手动启用风暴模式');
       // 自动退出
       this.stormTimer = setTimeout(() => {
         this.stormMode = false;
         this.stormTimer = null;
-        console.log('[AntiDebugInterceptor] 自动退出风暴模式');
+        console.error('[AntiDebugInterceptor] 自动退出风暴模式');
       }, 5000);
     } else {
-      console.log('[AntiDebugInterceptor] 手动禁用风暴模式');
+      console.error('[AntiDebugInterceptor] 手动禁用风暴模式');
       this.pausedCount = 0;
     }
   }

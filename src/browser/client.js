@@ -95,7 +95,7 @@ export class BrowserClient extends EventEmitter {
 
     // 监听新页面创建（弹窗、新标签页）
     this.context.on('page', async (newPage) => {
-      console.log('[BrowserClient] 检测到新页面');
+      console.error('[BrowserClient] 检测到新页面');
 
       // 清理旧页面的 CDP session（避免泄漏）
       if (this.cdpSession && this._cdpSessionPage && this._cdpSessionPage !== newPage) {
@@ -149,7 +149,7 @@ export class BrowserClient extends EventEmitter {
         if (event.name === '__deepspider_send__') {
           try {
             const data = JSON.parse(event.payload);
-            console.log('[BrowserClient] 收到消息:', data.type);
+            console.error('[BrowserClient] 收到消息:', data.type);
             if (this.onMessage) {
               this.onMessage(data, page);
             }
@@ -179,7 +179,7 @@ export class BrowserClient extends EventEmitter {
           antiDebugInterceptor.checkScript(scriptId, source);
         };
       } else {
-        console.log('[BrowserClient] CDP 拦截器已禁用');
+        console.error('[BrowserClient] CDP 拦截器已禁用');
       }
 
       // 保存引用（仅对当前活动页面）
@@ -194,11 +194,11 @@ export class BrowserClient extends EventEmitter {
       // 监听页面导航
       page.on('framenavigated', (frame) => {
         if (frame === page.mainFrame()) {
-          console.log('[BrowserClient] 页面导航到:', frame.url());
+          console.error('[BrowserClient] 页面导航到:', frame.url());
         }
       });
 
-      console.log('[BrowserClient] 页面已设置:', page.url() || '(空白页)');
+      console.error('[BrowserClient] 页面已设置:', page.url() || '(空白页)');
     } catch (e) {
       console.error('[BrowserClient] 设置页面失败:', e.message);
     }
@@ -229,7 +229,7 @@ export class BrowserClient extends EventEmitter {
         return this.cdpSession;
       } catch {
         // session 已失效，需要重新创建
-        console.log('[BrowserClient] CDP session 已失效，重新创建');
+        console.error('[BrowserClient] CDP session 已失效，重新创建');
         this.cdpSession = null;
         this._cdpSessionPage = null;
       }
@@ -249,7 +249,7 @@ export class BrowserClient extends EventEmitter {
       this.cdpSession = await this.page.context().newCDPSession(this.page);
       this._cdpSessionPage = this.page;
       this._cdpLastCheck = Date.now();
-      console.log('[BrowserClient] CDP session 已创建');
+      console.error('[BrowserClient] CDP session 已创建');
     } catch (e) {
       console.error('[BrowserClient] 创建 CDP session 失败:', e.message);
       this.cdpSession = null;
@@ -269,7 +269,7 @@ export class BrowserClient extends EventEmitter {
     } catch (e) {
       // 超时不一定是错误，页面可能仍在加载，继续执行
       if (e.message?.includes('timeout')) {
-        console.log('[BrowserClient] 导航超时，继续等待页面稳定...');
+        console.error('[BrowserClient] 导航超时，继续等待页面稳定...');
         // 等待一小段时间让页面尽可能完成加载
         await this.page.waitForTimeout(2000);
       } else {

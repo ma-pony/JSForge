@@ -246,7 +246,7 @@ export class EnvBridge {
    * 一次性采集全量浏览器数据，生成完整环境代码
    */
   async runFullPipeline() {
-    console.log('[DeepSpider:bridge] 开始采集浏览器环境数据');
+    console.error('[DeepSpider:bridge] 开始采集浏览器环境数据');
 
     // 1. 一次性采集全量数据
     const pageData = await this.collectPageData();
@@ -254,7 +254,7 @@ export class EnvBridge {
     // 2. 生成完整环境代码
     const envCode = buildEnvCode(pageData);
 
-    console.log('[DeepSpider:bridge] 环境代码生成完成');
+    console.error('[DeepSpider:bridge] 环境代码生成完成');
 
     // 3. 返回结果
     return {
