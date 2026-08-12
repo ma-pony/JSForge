@@ -9,10 +9,15 @@ import { z } from 'zod'
 import path from 'path'
 import fs from 'fs'
 import { homedir } from 'os'
+import { fileURLToPath } from 'url'
 
 /** @type {import("@opencode-ai/plugin").Plugin} */
 export default async ({ directory }) => {
-  const skillsDir = path.join(directory, 'skills/deepspider')
+  const packageRoot = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../..'
+  )
+  const skillsDir = path.join(packageRoot, 'skills/deepspider')
   const outputDir = path.join(homedir(), '.deepspider/output')
 
   return {
@@ -50,7 +55,8 @@ export default async ({ directory }) => {
 
     // compaction 时注入 session-state.md
     // 这是 compaction 后恢复上下文的唯一依据
-    'experimental.session.compacting': async (_input, output) => {
+    'experimental.session.compacting': async ({ sessionID }, output) => {
+      void sessionID
       if (!fs.existsSync(outputDir)) return
 
       // 查找最近修改的 task 目录

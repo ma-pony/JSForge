@@ -23,26 +23,29 @@ const PROJECT_ROOT = path.resolve(__dirname, '../..')
  *
  * @param {object} overrides
  * @param {string} [overrides.model] - CLI --model 覆盖（可选）
+ * @param {string} [overrides.projectRoot] - DeepSpider 安装根目录
  * @returns {object} opencode 配置对象
  */
-export function buildOpencodeConfig(overrides = {}) {
-  const root = PROJECT_ROOT
-
+export function buildOpencodeConfig({ model, projectRoot = PROJECT_ROOT } = {}) {
   const config = {
     default_agent: 'spider',
     autoupdate: false,
+    share: 'disabled',
 
     mcp: {
       deepspider: {
         type: 'local',
-        command: ['node', path.join(root, 'src/mcp/server.js')],
+        command: [process.execPath, path.join(projectRoot, 'src/mcp/server.js')],
+        cwd: projectRoot,
+        enabled: true,
+        timeout: 10000,
       },
     },
 
-    plugin: [path.join(root, 'plugins/deepspider-plugin')],
+    plugin: [path.join(projectRoot, 'plugins/deepspider-plugin')],
 
     skills: {
-      paths: [path.join(root, 'skills/deepspider')],
+      paths: [path.join(projectRoot, 'skills/deepspider')],
     },
 
     permission: {
@@ -51,16 +54,15 @@ export function buildOpencodeConfig(overrides = {}) {
       grep: 'allow',
       bash: 'ask',
       edit: 'ask',
-      write: 'ask',
-      'mcp_deepspider_*': 'allow',
+      'deepspider_*': 'allow',
     },
 
-    agent: loadAgentDefinitions(path.join(root, 'agents')),
+    agent: loadAgentDefinitions(path.join(projectRoot, 'agents')),
   }
 
   // 仅在明确指定时覆盖 model；否则完全由沙箱 opencode.json 决定
-  if (overrides.model) {
-    config.model = overrides.model
+  if (model) {
+    config.model = model
   }
 
   return config
