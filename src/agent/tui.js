@@ -14,33 +14,45 @@ const OPENCODE_BIN = path.join(PROJECT_ROOT, 'node_modules/.bin/opencode')
 /**
  * 启动 TUI：attach 到已启动的 opencode server
  *
- * 返回 exit code。不调用 process.exit —— 调用方负责退出+清理，这样
- * bin/cli.js 的 SIGINT handler 能先关掉 server 再退出。
+ * 返回可等待、可关闭的句柄；不调用 process.exit，由调用方负责退出+清理。
  *
- * @param {object} server - opencode server 句柄（server.url）
+ * @param {string} serverUrl - opencode server URL
  * @param {object} options - 选项
+ * @param {AbortSignal} [options.signal]
  * @param {boolean} [options.verbose]
- * @returns {Promise<number>} 子进程 exit code
+ * @param {typeof spawn} [options.spawnImpl]
+ * @returns {{wait: () => Promise<number>, close: () => void}} 可控 TUI 句柄
  */
-export async function startTUI(server, options = {}) {
-  if (!server?.url) {
-    throw new Error('server.url missing, cannot attach TUI')
+export function startTUI(serverUrl, { signal, verbose, spawnImpl = spawn } = {}) {
+  if (!serverUrl) {
+    throw new Error('server URL missing, cannot attach TUI')
   }
 
-  if (options.verbose) {
-    console.error(`[tui] attaching to ${server.url}`)
+  if (verbose) {
+    console.error(`[tui] attaching to ${serverUrl}`)
   }
 
-  const child = spawn(OPENCODE_BIN, ['attach', server.url], {
+  const child = spawnImpl(OPENCODE_BIN, ['attach', serverUrl], {
     stdio: 'inherit',
     env: process.env,
+    signal,
   })
 
-  // 等待 TUI 进程退出
-  const exitCode = await new Promise((resolve, reject) => {
-    child.on('exit', (code) => resolve(code ?? 0))
-    child.on('error', reject)
+  const exitPromise = new Promise((resolve, reject) => {
+    child.once('exit', (code) => resolve(code ?? 0))
+    child.once('error', (error) => {
+      const attachError = new Error(`Unable to attach OpenCode TUI: ${error.message}`, {
+        cause: error,
+      })
+      attachError.code = 'E_TUI_ATTACH'
+      reject(attachError)
+    })
   })
 
-  return exitCode
+  return {
+    wait: () => exitPromise,
+    close: () => {
+      if (child.exitCode == null && child.signalCode == null) child.kill('SIGTERM')
+    },
+  }
 }
