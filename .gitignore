@@ -33,6 +33,7 @@ docs/IMPLEMENTATION.md
 docs/BUSINESS.md
 
 .deepspider-agent
+.worktrees/
 
 # Spec artifacts (design docs, not code)
 specs/
