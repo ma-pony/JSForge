@@ -49,53 +49,57 @@ switch (first) {
   case 'agent': {
     // 启动独立 Agent
     const { startAgent } = await import('../src/agent/index.js');
-    const { startTUI } = await import('../src/agent/tui.js');
 
     const agentArgs = args.slice(1);
     const modelIdx = agentArgs.indexOf('--model');
     const model = modelIdx !== -1 ? agentArgs[modelIdx + 1] : undefined;
     const verbose = agentArgs.includes('--verbose');
 
-    // 保存 server 句柄以便 SIGINT/SIGTERM 时关闭，避免 4096 端口泄漏
-    let _server = null;
-    let _shuttingDown = false;
-    const shutdown = async (sig) => {
-      if (_shuttingDown) return;
-      _shuttingDown = true;
-      if (_server) {
-        try { await _server.close(); } catch { /* best-effort */ }
-      }
-      process.exit(sig === 'SIGINT' ? 130 : 143);
+    let runtime;
+    let signalExitCode;
+    const reportedCleanupErrors = new Set();
+    const reportCleanupError = (err) => {
+      if (reportedCleanupErrors.has(err)) return;
+      reportedCleanupErrors.add(err);
+      console.error(`❌ Agent 清理失败: ${err.message}`);
     };
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    const closeRuntime = async () => {
+      try {
+        await runtime?.close();
+      } catch (err) {
+        reportCleanupError(err);
+      }
+    };
+    const closeForSignal = async (exitCode) => {
+      signalExitCode = exitCode;
+      process.exitCode = exitCode;
+      await closeRuntime();
+    };
+    const onSigint = () => { void closeForSignal(130); };
+    const onSigterm = () => { void closeForSignal(143); };
+    process.once('SIGINT', onSigint);
+    process.once('SIGTERM', onSigterm);
 
     try {
-      const { server } = await startAgent({ model, verbose });
-      _server = server;
-      const exitCode = await startTUI(server, { verbose });
-      try { await server.close(); } catch { /* best-effort */ }
-      process.exit(exitCode);
+      runtime = await startAgent({ model, verbose });
+      if (signalExitCode == null) {
+        const tuiExitCode = await runtime.attachTUI();
+        if (process.exitCode == null) process.exitCode = tuiExitCode;
+      }
     } catch (err) {
       if (err && err.code === 'E_WIZARD_CANCELLED') {
-        // 用户在首次运行向导中按了 Ctrl+C，算正常取消
+        process.exitCode = err.exitCode || 130;
         console.error('');
         console.error('已取消。');
-        process.exit(err.exitCode || 130);
+      } else if (signalExitCode == null) {
+        process.exitCode = err.exitCode || 1;
+        console.error(`❌ Agent 启动失败: ${err.message}`);
+        if (verbose) console.error(err.stack);
       }
-      console.error(`❌ Agent 启动失败: ${err.message}`);
-      if (verbose) console.error(err.stack);
-      if (_server) {
-        try { await _server.close(); } catch { /* best-effort */ }
-      }
-      // 端口占用给一个 actionable 提示（ProdReady F-07）
-      if (err && /EADDRINUSE|port 4096|Failed to start server/i.test(err.message || '')) {
-        console.error('');
-        console.error('提示: opencode server 默认端口 4096 被占用。可能是上次运行残留：');
-        console.error('  lsof -iTCP:4096 -sTCP:LISTEN -Pn   # 查看占用');
-        console.error('  kill <pid>                         # 关掉残留进程后重试');
-      }
-      process.exit(1);
+    } finally {
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+      await closeRuntime();
     }
     break;
   }

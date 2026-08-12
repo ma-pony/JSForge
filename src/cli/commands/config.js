@@ -54,10 +54,6 @@ function list() {
   console.log(`sandbox: ${paths.root}`)
   console.log(`opencode.json: ${paths.opencodeJson}`)
   if (fs.existsSync(paths.opencodeJson)) {
-    const realPath = fs.realpathSync(paths.opencodeJson)
-    if (realPath !== paths.opencodeJson) {
-      console.log(`  (symlink → ${realPath})`)
-    }
     console.log('---')
     console.log(fs.readFileSync(paths.opencodeJson, 'utf-8').trimEnd())
   } else {
@@ -93,15 +89,11 @@ function setModel(model) {
   const paths = getSandboxPaths()
   const target = paths.opencodeJson
 
-  // 1. 先读出当前内容（符号链接：读原文件，稍后替换为独立文件）
+  // 1. 先读出当前内容
   let data = {}
-  let wasSymlink = false
   if (fs.existsSync(target)) {
     try {
-      const st = fs.lstatSync(target)
-      wasSymlink = st.isSymbolicLink()
-      const sourceForRead = wasSymlink ? fs.realpathSync(target) : target
-      data = JSON.parse(fs.readFileSync(sourceForRead, 'utf-8'))
+      data = JSON.parse(fs.readFileSync(target, 'utf-8'))
     } catch (e) {
       console.error(`[config] 解析 ${target} 失败：${e.message}`)
       process.exit(1)
@@ -115,11 +107,6 @@ function setModel(model) {
   const content = JSON.stringify(data, null, 2) + '\n'
   try {
     fs.writeFileSync(tmp, content, { mode: 0o600 })
-    // 若原来是符号链接，rename 会把符号链接替换成实体文件（不动指向的原文件），
-    // 这正是我们想要的——沙箱保存一份独立副本，不污染用户原配置。
-    if (wasSymlink) {
-      console.error('[config] opencode.json 当前是软链接，已在沙箱内独立保存。')
-    }
     fs.renameSync(tmp, target)
   } catch (e) {
     try { fs.unlinkSync(tmp) } catch { /* cleanup best-effort */ }
