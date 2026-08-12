@@ -23,10 +23,13 @@ const DEFAULT_INIT_CHOICE = '1'
  * @param {object} options
  * @param {string} [options.model] - 覆盖 LLM 模型
  * @param {boolean} [options.verbose]
+ * @param {AbortSignal} [options.signal]
  * @returns {Promise<OpencodeRuntime>}
  */
 export async function startAgent(options = {}) {
+  throwIfAborted(options.signal)
   await ensureSandboxInitialized(options)
+  throwIfAborted(options.signal)
   applySandboxEnv()
 
   if (options.verbose) {
@@ -39,16 +42,24 @@ export async function startAgent(options = {}) {
     directory: process.cwd(),
     verbose: options.verbose,
   })
-  await runtime.start()
-  return runtime
+  try {
+    await startRuntime(runtime, options.signal)
+    throwIfAborted(options.signal)
+    return runtime
+  } catch (error) {
+    if (options.signal?.aborted) await closeAbortedRuntime(runtime, error)
+    throw error
+  }
 }
 
 async function ensureSandboxInitialized(options) {
+  throwIfAborted(options.signal)
   if (isSandboxInitialized()) return
 
   // 必须在 applySandboxEnv 前探测，避免读取到自己的沙箱凭据。
   const existing = detectExistingOpencode()
-  const mode = await promptInitMode(existing)
+  const mode = await promptInitMode(existing, options.signal)
+  throwIfAborted(options.signal)
   const result = initSandbox(mode)
   if (options.verbose) {
     console.error('[agent] sandbox initialized:', result)
@@ -68,7 +79,28 @@ export function selectInitMode(existing, answer) {
   return (answer || '').trim() === '2' ? 'fresh' : 'link-auth'
 }
 
-async function promptInitMode(existing) {
+export function selectAgentExitCode(currentExitCode, tuiExitCode) {
+  return currentExitCode == null ? tuiExitCode : currentExitCode
+}
+
+export function reportAgentCleanupError(error, reportedErrors, write = console.error) {
+  if (!error || reportedErrors.has(error)) return false
+  reportedErrors.add(error)
+  write(`❌ Agent 清理失败: ${error.message}`)
+  return true
+}
+
+export function reportAgentStartupFailure(
+  error,
+  { verbose = false, reportedCleanupErrors = new Set(), write = console.error } = {}
+) {
+  write(`❌ Agent 启动失败: ${error.message}`)
+  reportAgentCleanupError(error.cleanupError, reportedCleanupErrors, write)
+  if (verbose && error.stack) write(error.stack)
+  return error.exitCode || 1
+}
+
+async function promptInitMode(existing, signal) {
   if (!existing.authJson) return 'fresh'
 
   console.error('')
@@ -76,7 +108,7 @@ async function promptInitMode(existing) {
   console.error('[2] 创建独立空沙箱')
   console.error('')
 
-  const answer = await ask('选择 [1/2]（默认 1）: ')
+  const answer = await ask('选择 [1/2]（默认 1）: ', { signal })
   return selectInitMode(existing, answer || DEFAULT_INIT_CHOICE)
 }
 
@@ -90,9 +122,9 @@ function printInitSummary(result) {
   console.error('')
 }
 
-function ask(question) {
+export function ask(question, { input = process.stdin, output = process.stderr, signal } = {}) {
   return new Promise((resolve, reject) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
+    const rl = readline.createInterface({ input, output })
     let settled = false
 
     const finish = (callback, value) => {
@@ -100,19 +132,79 @@ function ask(question) {
       settled = true
       rl.removeListener('SIGINT', onSigint)
       rl.removeListener('close', onClose)
+      signal?.removeEventListener('abort', onAbort)
       rl.close()
       callback(value)
     }
-    const cancelled = (reason) =>
-      Object.assign(new Error(`用户取消初始化向导 (${reason})`), {
-        code: 'E_WIZARD_CANCELLED',
-        exitCode: 130,
-      })
-    const onSigint = () => finish(reject, cancelled('SIGINT'))
-    const onClose = () => finish(reject, cancelled('stdin closed'))
+    const onSigint = () => finish(reject, wizardCancelledError({ signal: 'SIGINT', exitCode: 130 }))
+    const onClose = () => finish(reject, wizardCancelledError({ signal: 'stdin closed', exitCode: 130 }))
+    const onAbort = () => finish(reject, wizardCancelledError(signal.reason))
 
     rl.once('SIGINT', onSigint)
     rl.once('close', onClose)
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
     rl.question(question, (answer) => finish(resolve, answer))
   })
+}
+
+async function startRuntime(runtime, signal) {
+  if (!signal) return runtime.start()
+  throwIfAborted(signal)
+
+  let onAbort
+  const aborted = new Promise((_, reject) => {
+    onAbort = () => reject(agentAbortError(signal.reason))
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+
+  try {
+    await Promise.race([runtime.start(), aborted])
+  } catch (error) {
+    if (signal.aborted) {
+      await closeAbortedRuntime(runtime, error)
+    }
+    throw error
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+  }
+}
+
+async function closeAbortedRuntime(runtime, error) {
+  try {
+    await runtime.close()
+  } catch (cleanupError) {
+    if (error && typeof error === 'object' && !error.cleanupError) {
+      error.cleanupError = cleanupError
+    }
+  }
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw agentAbortError(signal.reason)
+}
+
+function agentAbortError(reason) {
+  return Object.assign(new Error(`Agent 启动已取消 (${signalLabel(reason)})`), {
+    code: 'E_AGENT_CANCELLED',
+    exitCode: signalExitCode(reason),
+  })
+}
+
+function wizardCancelledError(reason) {
+  return Object.assign(new Error(`用户取消初始化向导 (${signalLabel(reason)})`), {
+    code: 'E_WIZARD_CANCELLED',
+    exitCode: signalExitCode(reason),
+  })
+}
+
+function signalExitCode(reason) {
+  return reason?.exitCode === 143 ? 143 : 130
+}
+
+function signalLabel(reason) {
+  return reason?.signal || 'abort'
 }

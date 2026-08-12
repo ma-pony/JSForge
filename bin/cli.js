@@ -48,7 +48,12 @@ switch (first) {
 
   case 'agent': {
     // 启动独立 Agent
-    const { startAgent } = await import('../src/agent/index.js');
+    const {
+      reportAgentCleanupError,
+      reportAgentStartupFailure,
+      selectAgentExitCode,
+      startAgent,
+    } = await import('../src/agent/index.js');
 
     const agentArgs = args.slice(1);
     const modelIdx = agentArgs.indexOf('--model');
@@ -57,44 +62,41 @@ switch (first) {
 
     let runtime;
     let signalExitCode;
+    const startupAbortController = new globalThis.AbortController();
     const reportedCleanupErrors = new Set();
-    const reportCleanupError = (err) => {
-      if (reportedCleanupErrors.has(err)) return;
-      reportedCleanupErrors.add(err);
-      console.error(`❌ Agent 清理失败: ${err.message}`);
-    };
     const closeRuntime = async () => {
       try {
         await runtime?.close();
       } catch (err) {
-        reportCleanupError(err);
+        reportAgentCleanupError(err, reportedCleanupErrors);
       }
     };
-    const closeForSignal = async (exitCode) => {
+    const closeForSignal = async (exitCode, signal) => {
       signalExitCode = exitCode;
       process.exitCode = exitCode;
+      startupAbortController.abort({ signal, exitCode });
       await closeRuntime();
     };
-    const onSigint = () => { void closeForSignal(130); };
-    const onSigterm = () => { void closeForSignal(143); };
+    const onSigint = () => { void closeForSignal(130, 'SIGINT'); };
+    const onSigterm = () => { void closeForSignal(143, 'SIGTERM'); };
     process.once('SIGINT', onSigint);
     process.once('SIGTERM', onSigterm);
 
     try {
-      runtime = await startAgent({ model, verbose });
+      runtime = await startAgent({ model, verbose, signal: startupAbortController.signal });
       if (signalExitCode == null) {
         const tuiExitCode = await runtime.attachTUI();
-        if (process.exitCode == null) process.exitCode = tuiExitCode;
+        process.exitCode = selectAgentExitCode(process.exitCode, tuiExitCode);
       }
     } catch (err) {
       if (err && err.code === 'E_WIZARD_CANCELLED') {
-        process.exitCode = err.exitCode || 130;
-        console.error('');
-        console.error('已取消。');
+        if (signalExitCode == null) {
+          process.exitCode = err.exitCode || 130;
+          console.error('');
+          console.error('已取消。');
+        }
       } else if (signalExitCode == null) {
-        process.exitCode = err.exitCode || 1;
-        console.error(`❌ Agent 启动失败: ${err.message}`);
-        if (verbose) console.error(err.stack);
+        process.exitCode = reportAgentStartupFailure(err, { verbose, reportedCleanupErrors });
       }
     } finally {
       process.removeListener('SIGINT', onSigint);
