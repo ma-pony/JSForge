@@ -25,6 +25,7 @@ export const OPENCODE_PACKAGES = [
 
 const READY_ATTEMPTS = 40
 const READY_INTERVAL_MS = 250
+let pathCriticalSection = Promise.resolve()
 
 /**
  * Assert that every OpenCode package installed with DeepSpider is the version
@@ -129,18 +130,34 @@ export class OpencodeRuntime {
 
     this.state = 'closing'
     this._closePromise = (async () => {
-      this.abortController.abort()
-
       const tui = this.tui
       const server = this.server
-      this.tui = null
-      this.server = null
-      this.client = null
+      const errors = []
 
-      if (tui) await tui.close()
-      if (server) await server.close()
+      try {
+        try {
+          this.abortController.abort()
+        } catch (error) {
+          errors.push(error)
+        }
+        try {
+          if (tui) await tui.close()
+        } catch (error) {
+          errors.push(error)
+        }
+        try {
+          if (server) await server.close()
+        } catch (error) {
+          errors.push(error)
+        }
+      } finally {
+        this.tui = null
+        this.server = null
+        this.client = null
+        this.state = 'closed'
+      }
 
-      this.state = 'closed'
+      if (errors.length > 0) throw cleanupError(errors)
     })()
 
     return this._closePromise
@@ -157,32 +174,35 @@ export class OpencodeRuntime {
       this.client = client
       this.server = server
       await this._waitForReady()
+      if (this.state !== 'starting' || this.abortController.signal.aborted) {
+        throw runtimeError('E_RUNTIME_CLOSED', 'OpenCode runtime was closed while becoming ready')
+      }
       this.state = 'ready'
     } catch (error) {
-      await this.close()
+      let cleanupFailure
+      try {
+        await this.close()
+      } catch (cleanupError) {
+        cleanupFailure = cleanupError
+      }
+      if (cleanupFailure && error && typeof error === 'object') {
+        error.cleanupError = cleanupFailure
+      }
       throw error
     }
   }
 
   async _createServer() {
-    const originalPath = process.env.PATH
     const binDirectory = path.join(this.projectRoot, 'node_modules/.bin')
-    process.env.PATH = originalPath
-      ? `${binDirectory}${path.delimiter}${originalPath}`
-      : binDirectory
-
-    try {
-      return await this.createOpencodeFn({
+    return withPinnedOpencodePath(binDirectory, () =>
+      this.createOpencodeFn({
         hostname: '127.0.0.1',
         port: 0,
         timeout: 10000,
         signal: this.abortController.signal,
         config: this.config,
       })
-    } finally {
-      if (originalPath === undefined) delete process.env.PATH
-      else process.env.PATH = originalPath
-    }
+    )
   }
 
   async _waitForReady() {
@@ -314,6 +334,33 @@ function runtimeError(code, message, cause) {
   const error = new Error(message, cause ? { cause } : undefined)
   error.code = code
   return error
+}
+
+async function withPinnedOpencodePath(binDirectory, createOpencodeFn) {
+  const previous = pathCriticalSection
+  let release
+  pathCriticalSection = new Promise((resolve) => {
+    release = resolve
+  })
+  await previous
+
+  const originalPath = process.env.PATH
+  process.env.PATH = originalPath
+    ? `${binDirectory}${path.delimiter}${originalPath}`
+    : binDirectory
+
+  try {
+    return await createOpencodeFn()
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH
+    else process.env.PATH = originalPath
+    release()
+  }
+}
+
+function cleanupError(errors) {
+  if (errors.length === 1) return errors[0]
+  return new globalThis.AggregateError(errors, 'OpenCode runtime cleanup failed')
 }
 
 function sleep(milliseconds) {

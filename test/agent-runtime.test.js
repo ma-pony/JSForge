@@ -53,6 +53,14 @@ function makeRuntimeWithReadyFakes(client = readyClient(), overrides = {}) {
   return { runtime, server, tui }
 }
 
+function deferred() {
+  let resolve
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 test('start reaches ready only after all readiness checks pass', async () => {
   const { runtime } = makeRuntimeWithReadyFakes()
 
@@ -87,6 +95,137 @@ test('close is idempotent', async () => {
   assert.equal(tui.closeCalls, 1)
   assert.equal(server.closeCalls, 1)
   assert.equal(runtime.state, 'closed')
+})
+
+test('close attempts both resources and reaches closed when both cleanups fail', async () => {
+  const { runtime, server, tui } = makeRuntimeWithReadyFakes()
+  const tuiError = new Error('synthetic TUI close failure')
+  const serverError = new Error('synthetic server close failure')
+  tui.close = () => {
+    tui.closeCalls++
+    throw tuiError
+  }
+  server.close = () => {
+    server.closeCalls++
+    throw serverError
+  }
+  await runtime.start()
+  await runtime.attachTUI()
+
+  await assert.rejects(
+    runtime.close(),
+    (err) =>
+      err instanceof AggregateError &&
+      err.errors.includes(tuiError) &&
+      err.errors.includes(serverError)
+  )
+
+  assert.equal(tui.closeCalls, 1)
+  assert.equal(server.closeCalls, 1)
+  assert.equal(runtime.state, 'closed')
+  assert.equal(runtime.tui, null)
+  assert.equal(runtime.server, null)
+  assert.equal(runtime.client, null)
+})
+
+test('readiness failure retains its stage error when server cleanup fails', async () => {
+  const client = readyClient({
+    v2: {
+      health: { get: async () => ({ data: { healthy: false } }) },
+      agent: { list: async () => ({ data: { data: [{ id: 'spider' }] } }) },
+      skill: { list: async () => ({ data: { data: [{ name: 'deepspider' }] } }) },
+    },
+  })
+  const { runtime, server } = makeRuntimeWithReadyFakes(client)
+  const cleanupError = new Error('synthetic server close failure')
+  server.close = () => {
+    server.closeCalls++
+    throw cleanupError
+  }
+
+  await assert.rejects(
+    runtime.start(),
+    (err) => err.code === 'E_OPENCODE_HEALTH' && err.cleanupError === cleanupError
+  )
+
+  assert.equal(server.closeCalls, 1)
+  assert.equal(runtime.state, 'closed')
+})
+
+test('close during pending readiness cannot transition runtime back to ready', async () => {
+  const toolStarted = deferred()
+  const toolRelease = deferred()
+  const client = readyClient({
+    tool: {
+      ids: async () => {
+        toolStarted.resolve()
+        await toolRelease.promise
+        return { data: ['evolve_skill'] }
+      },
+    },
+  })
+  const { runtime, server } = makeRuntimeWithReadyFakes(client)
+
+  const starting = runtime.start()
+  await toolStarted.promise
+  await runtime.close()
+  toolRelease.resolve()
+
+  await assert.rejects(starting, (err) => err.code === 'E_RUNTIME_CLOSED')
+  assert.equal(server.closeCalls, 1)
+  assert.equal(runtime.state, 'closed')
+})
+
+test('concurrent runtime starts serialize temporary PATH changes and restore the original PATH', async () => {
+  const originalPath = process.env.PATH
+  const firstEntered = deferred()
+  const firstRelease = deferred()
+  const secondEntered = deferred()
+  const seenPaths = []
+  const first = makeRuntimeWithReadyFakes(readyClient(), {
+    projectRoot: '/tmp/deepspider-runtime-first',
+    createOpencodeFn: async () => {
+      seenPaths.push(process.env.PATH)
+      firstEntered.resolve()
+      await firstRelease.promise
+      throw new Error('synthetic first create failure')
+    },
+  }).runtime
+  const second = makeRuntimeWithReadyFakes(readyClient(), {
+    projectRoot: '/tmp/deepspider-runtime-second',
+    createOpencodeFn: async () => {
+      seenPaths.push(process.env.PATH)
+      secondEntered.resolve()
+      return { client: readyClient(), server: { url: 'http://127.0.0.1:45679', close() {} } }
+    },
+  }).runtime
+  let firstStart
+  let secondStart
+
+  try {
+    firstStart = first.start()
+    await firstEntered.promise
+    secondStart = second.start()
+    await Promise.resolve()
+    assert.equal(seenPaths.length, 1)
+
+    firstRelease.resolve()
+    await assert.rejects(firstStart, /synthetic first create failure/)
+    await secondEntered.promise
+    await secondStart
+
+    assert.deepEqual(seenPaths, [
+      `/tmp/deepspider-runtime-first/node_modules/.bin:${originalPath}`,
+      `/tmp/deepspider-runtime-second/node_modules/.bin:${originalPath}`,
+    ])
+    assert.equal(process.env.PATH, originalPath)
+  } finally {
+    firstRelease.resolve()
+    await Promise.allSettled([firstStart, secondStart].filter(Boolean))
+    if (originalPath === undefined) delete process.env.PATH
+    else process.env.PATH = originalPath
+    await Promise.allSettled([first.close(), second.close()])
+  }
 })
 
 test('start rejects unsupported installed OpenCode versions before spawning', async () => {
