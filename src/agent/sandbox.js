@@ -5,8 +5,8 @@
  * 通过 XDG_* 环境变量重定向。DeepSpider 不再维护自己的 settings.json，
  * 用户的配置就是 sandbox 内的 opencode.json + auth.json。
  *
- * 首次启动可选择从用户已有的 opencode 安装软链接 opencode.json / auth.json
- * 过来（按文件粒度，不链接 db/log/sessions 等运行时状态）。
+ * 首次启动可选择仅从用户已有的 opencode 安装软链接 auth.json，
+ * 配置始终保留在沙箱内（不链接 db/log/sessions 等运行时状态）。
  */
 
 import fs from 'fs'
@@ -27,6 +27,7 @@ const SANDBOX_OPENCODE_DATA_DIR = path.join(SANDBOX_DIRS.XDG_DATA_HOME, 'opencod
 const SANDBOX_OPENCODE_JSON = path.join(SANDBOX_OPENCODE_CONFIG_DIR, 'opencode.json')
 const SANDBOX_AUTH_JSON = path.join(SANDBOX_OPENCODE_DATA_DIR, 'auth.json')
 const INIT_MARKER = path.join(SANDBOX_ROOT, '.init-done')
+const SUPPORTED_MODES = new Set(['link-auth', 'fresh'])
 
 /**
  * 创建沙箱目录，返回 XDG 环境变量映射。
@@ -46,6 +47,7 @@ export function prepareSandbox() {
  */
 export function applySandboxEnv() {
   prepareSandbox()
+  localizeSandboxConfig()
   for (const [k, v] of Object.entries(SANDBOX_DIRS)) {
     process.env[k] = v
   }
@@ -106,15 +108,41 @@ export function detectExistingOpencode() {
   }
 }
 
+export function localizeSandboxConfig() {
+  const target = SANDBOX_OPENCODE_JSON
+  let stat
+  try {
+    stat = fs.lstatSync(target)
+  } catch (err) {
+    if (err.code === 'ENOENT') return false
+    throw err
+  }
+  if (!stat.isSymbolicLink()) return false
+
+  const content = fs.readFileSync(fs.realpathSync(target), 'utf8')
+  const tmp = `${target}.tmp.${process.pid}.${Date.now()}`
+  fs.writeFileSync(tmp, content, { mode: 0o600 })
+  fs.renameSync(tmp, target)
+  return true
+}
+
+function assertSandboxMode(mode) {
+  if (!SUPPORTED_MODES.has(mode)) {
+    throw Object.assign(new Error(`Unsupported sandbox mode: ${mode}`), {
+      code: 'E_SANDBOX_MODE',
+    })
+  }
+}
+
 /**
  * 初始化沙箱
  *
- * @param {'link-all'|'link-auth'|'fresh'} mode
- *   - link-all: 软链接用户已有的 opencode.json 和 auth.json
+ * @param {'link-auth'|'fresh'} mode
  *   - link-auth: 只软链接 auth.json（让用户复用登录凭据，但配置独立）
  *   - fresh: 空沙箱，什么都不链接
  */
 export function initSandbox(mode = 'fresh') {
+  assertSandboxMode(mode)
   prepareSandbox()
 
   const existing = detectExistingOpencode()
@@ -122,14 +150,9 @@ export function initSandbox(mode = 'fresh') {
   // 计算要建的链接：只清理我们真正要替换的目标，保持其它文件不动。
   // Fresh 模式下 targets 为空，绝不触碰沙箱现有文件。
   const targets = []
-  if (mode === 'link-all' || mode === 'link-auth') {
+  if (mode === 'link-auth') {
     if (existing.authJson) {
       targets.push({ src: existing.authJson, dst: SANDBOX_AUTH_JSON, key: 'authJson' })
-    }
-  }
-  if (mode === 'link-all') {
-    if (existing.opencodeJson) {
-      targets.push({ src: existing.opencodeJson, dst: SANDBOX_OPENCODE_JSON, key: 'opencodeJson' })
     }
   }
 
@@ -142,7 +165,7 @@ export function initSandbox(mode = 'fresh') {
   const bakSuffix = `.bak.${Date.now()}`
   const backups = [] // { dst, bak }  用于失败回滚
   const createdLinks = [] // 用于失败回滚
-  const linked = { opencodeJson: false, authJson: false }
+  const linked = { authJson: false }
 
   try {
     for (const { src, dst, key } of targets) {

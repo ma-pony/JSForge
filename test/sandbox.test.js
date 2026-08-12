@@ -18,7 +18,7 @@ const TMP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-sandbox-test-'))
 process.env.HOME = TMP_HOME
 
 const sandbox = await import('../src/agent/sandbox.js')
-const { initSandbox, prepareSandbox, getSandboxPaths } = sandbox
+const { initSandbox, localizeSandboxConfig, prepareSandbox, getSandboxPaths } = sandbox
 
 let passed = 0
 let failed = 0
@@ -38,6 +38,18 @@ function test(name, fn) {
 console.log('=== sandbox.js regression tests ===')
 console.log(`tmp HOME: ${TMP_HOME}`)
 
+function resetSandboxFiles() {
+  const paths = getSandboxPaths()
+  for (const target of [paths.opencodeJson, paths.authJson]) {
+    try { fs.unlinkSync(target) } catch { /* already absent */ }
+  }
+  for (const dir of [path.dirname(paths.opencodeJson), path.dirname(paths.authJson)]) {
+    for (const file of fs.readdirSync(dir)) {
+      if (file.includes('.bak.')) fs.unlinkSync(path.join(dir, file))
+    }
+  }
+}
+
 // ---- T1: fresh 模式不应触碰已存在的沙箱文件 ----
 test('fresh mode does not touch existing sandbox files', () => {
   prepareSandbox()
@@ -49,8 +61,7 @@ test('fresh mode does not touch existing sandbox files', () => {
   const result = initSandbox('fresh')
 
   assert.equal(result.mode, 'fresh')
-  assert.equal(result.linked.opencodeJson, false)
-  assert.equal(result.linked.authJson, false)
+  assert.deepEqual(result.linked, { authJson: false })
   // 关键断言：fresh 模式必须保留原文件，不得改名/删除/创建 .bak
   assert.ok(fs.existsSync(paths.opencodeJson), 'opencode.json should still exist')
   assert.equal(fs.readFileSync(paths.opencodeJson, 'utf-8'), original)
@@ -60,90 +71,75 @@ test('fresh mode does not touch existing sandbox files', () => {
   assert.equal(baks.length, 0, `unexpected backup files: ${baks.join(', ')}`)
 })
 
-// ---- T2: link-all 模式下，已存在的真实文件必须被备份后替换为符号链接 ----
-test('link-all mode backs up existing file before symlinking', () => {
-  // 重新清理
-  const paths = getSandboxPaths()
-  for (const p of [paths.opencodeJson, paths.authJson]) {
-    try { fs.unlinkSync(p) } catch { /* cleanup */ }
-  }
-  for (const f of fs.readdirSync(path.dirname(paths.opencodeJson))) {
-    if (f.includes('.bak.')) {
-      try { fs.unlinkSync(path.join(path.dirname(paths.opencodeJson), f)) } catch { /* cleanup */ }
-    }
-  }
+test('link-all is rejected', () => {
+  assert.throws(
+    () => initSandbox('link-all'),
+    (err) => err.code === 'E_SANDBOX_MODE'
+  )
+})
 
-  // 在沙箱里预置一份"老" opencode.json
-  fs.writeFileSync(paths.opencodeJson, '{"old":true}\n')
-  // 在 HOME 外造一个"用户原始" opencode.json 作为 symlink 目标
+test('link-auth links auth but never links opencode config', () => {
+  resetSandboxFiles()
   const userConfigDir = path.join(TMP_HOME, '.config', 'opencode')
+  const userDataDir = path.join(TMP_HOME, '.local', 'share', 'opencode')
   fs.mkdirSync(userConfigDir, { recursive: true })
-  const userOpencodeJson = path.join(userConfigDir, 'opencode.json')
-  fs.writeFileSync(userOpencodeJson, '{"from":"user"}\n')
+  fs.mkdirSync(userDataDir, { recursive: true })
+  fs.writeFileSync(path.join(userConfigDir, 'opencode.json'), '{"model":"global/model"}\n')
+  fs.writeFileSync(path.join(userDataDir, 'auth.json'), '{"provider":"credential"}\n')
 
-  const result = initSandbox('link-all')
+  const result = initSandbox('link-auth')
 
-  assert.equal(result.linked.opencodeJson, true)
-  // 现在沙箱内的 opencode.json 应是软链接，指向用户文件
-  const st = fs.lstatSync(paths.opencodeJson)
-  assert.ok(st.isSymbolicLink(), 'sandbox opencode.json should be a symlink')
-  // realpath 在 macOS 会带 /private 前缀，两侧都解析后再比较
-  assert.equal(fs.realpathSync(paths.opencodeJson), fs.realpathSync(userOpencodeJson))
-  // 老文件应被备份
+  assert.equal(result.linked.authJson, true)
+  assert.ok(fs.lstatSync(getSandboxPaths().authJson).isSymbolicLink())
+  assert.equal(fs.existsSync(getSandboxPaths().opencodeJson), false)
+})
+
+// ---- T2: link-auth 模式下，已存在的凭据文件必须被备份后替换为符号链接 ----
+test('link-auth mode backs up existing auth file before symlinking', () => {
+  resetSandboxFiles()
+  const paths = getSandboxPaths()
+  fs.writeFileSync(paths.authJson, '{"old":true}\n')
+  const userDataDir = path.join(TMP_HOME, '.local', 'share', 'opencode')
+  fs.mkdirSync(userDataDir, { recursive: true })
+  const userAuthJson = path.join(userDataDir, 'auth.json')
+  fs.writeFileSync(userAuthJson, '{"from":"user"}\n')
+
+  const result = initSandbox('link-auth')
+
+  assert.equal(result.linked.authJson, true)
+  const st = fs.lstatSync(paths.authJson)
+  assert.ok(st.isSymbolicLink(), 'sandbox auth.json should be a symlink')
+  assert.equal(fs.realpathSync(paths.authJson), fs.realpathSync(userAuthJson))
   const baks = fs
-    .readdirSync(path.dirname(paths.opencodeJson))
-    .filter((f) => f.startsWith('opencode.json.bak.'))
+    .readdirSync(path.dirname(paths.authJson))
+    .filter((f) => f.startsWith('auth.json.bak.'))
   assert.equal(baks.length, 1, 'exactly one backup of the old file')
   assert.equal(
-    fs.readFileSync(path.join(path.dirname(paths.opencodeJson), baks[0]), 'utf-8'),
+    fs.readFileSync(path.join(path.dirname(paths.authJson), baks[0]), 'utf-8'),
     '{"old":true}\n'
   )
 })
 
 // ---- T3: rollback when symlinkSync fails midway ----
-test('rollback restores original file when symlink fails', () => {
+test('rollback restores original auth file when symlink fails', () => {
+  resetSandboxFiles()
   const paths = getSandboxPaths()
-  // 清理
-  for (const p of [paths.opencodeJson, paths.authJson]) {
-    try { fs.unlinkSync(p) } catch { /* cleanup */ }
-  }
-  for (const f of fs.readdirSync(path.dirname(paths.opencodeJson))) {
-    if (f.includes('.bak.')) {
-      try { fs.unlinkSync(path.join(path.dirname(paths.opencodeJson), f)) } catch { /* cleanup */ }
-    }
-  }
-
-  // 沙箱里有一份真实老文件
   const original = '{"sentinel":"original"}\n'
-  fs.writeFileSync(paths.opencodeJson, original)
+  fs.writeFileSync(paths.authJson, original)
 
-  // 把用户的 source 指向一个不存在的路径，让 symlinkSync 仍然成功（symlink 允许悬空），
-  // 不太能稳定触发失败。改用另一种构造：让 authJson 的 source 不存在，但目标已经是个 *目录*
-  // ——这会让 symlinkSync 抛 EEXIST/EISDIR。
-  // 简化做法：直接 monkey-patch fs.symlinkSync 让第二个调用抛错。
   const origSymlink = fs.symlinkSync
-  let calls = 0
-  fs.symlinkSync = function (src, dst) {
-    calls++
-    if (calls === 2) {
-      throw new Error('synthetic symlink failure')
-    }
-    return origSymlink.call(this, src, dst)
+  fs.symlinkSync = function (_src, _dst) {
+    throw new Error('synthetic symlink failure')
   }
 
-  // 准备两个用户源文件，让 link-all 触发两次 symlinkSync
-  const userConfigDir = path.join(TMP_HOME, '.config', 'opencode')
   const userDataDir = path.join(TMP_HOME, '.local', 'share', 'opencode')
-  fs.mkdirSync(userConfigDir, { recursive: true })
   fs.mkdirSync(userDataDir, { recursive: true })
-  const userOpencodeJson = path.join(userConfigDir, 'opencode.json')
   const userAuthJson = path.join(userDataDir, 'auth.json')
-  fs.writeFileSync(userOpencodeJson, '{"from":"user"}\n')
   fs.writeFileSync(userAuthJson, '{"auth":"user"}\n')
 
   let threw = false
   try {
-    initSandbox('link-all')
+    initSandbox('link-auth')
   } catch (e) {
     threw = true
     assert.match(e.message, /synthetic symlink failure/)
@@ -152,14 +148,24 @@ test('rollback restores original file when symlink fails', () => {
   }
   assert.ok(threw, 'initSandbox should propagate the symlink failure')
 
-  // 关键断言：原文件应被还原（renameSync → 备份 → rollback）
-  // 注意:测试里第一次 symlink 成功的可能是 authJson 也可能是 opencodeJson，
-  // 取决于 targets 顺序（代码里 authJson 在前）。无论如何，opencode.json 老内容必须被回滚。
-  assert.ok(fs.existsSync(paths.opencodeJson), 'opencode.json should be restored after rollback')
-  // 它应该是个文件而不是软链接
-  const st = fs.lstatSync(paths.opencodeJson)
+  assert.ok(fs.existsSync(paths.authJson), 'auth.json should be restored after rollback')
+  const st = fs.lstatSync(paths.authJson)
   assert.ok(!st.isSymbolicLink(), 'rollback should leave a regular file, not a symlink')
-  assert.equal(fs.readFileSync(paths.opencodeJson, 'utf-8'), original)
+  assert.equal(fs.readFileSync(paths.authJson, 'utf-8'), original)
+})
+
+test('legacy config symlink becomes an isolated local file', () => {
+  resetSandboxFiles()
+  prepareSandbox()
+  const externalConfig = path.join(TMP_HOME, 'legacy-opencode.json')
+  const original = '{"model":"legacy/model"}\n'
+  fs.writeFileSync(externalConfig, original)
+  fs.symlinkSync(externalConfig, getSandboxPaths().opencodeJson)
+  localizeSandboxConfig()
+  assert.equal(fs.lstatSync(getSandboxPaths().opencodeJson).isSymbolicLink(), false)
+  assert.equal(fs.readFileSync(getSandboxPaths().opencodeJson, 'utf8'), original)
+  assert.equal(fs.readFileSync(externalConfig, 'utf8'), original)
+  assert.equal(fs.statSync(getSandboxPaths().opencodeJson).mode & 0o777, 0o600)
 })
 
 console.log('')
