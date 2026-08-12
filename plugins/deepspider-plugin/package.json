@@ -4,6 +4,10 @@
   "type": "module",
   "main": "server.js",
   "engines": {
-    "opencode": ">=1.0.0"
+    "opencode": "1.18.16"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.16",
+    "zod": "^4.3.6"
   }
 }

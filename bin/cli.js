@@ -4,8 +4,6 @@
  * 路由命令到对应处理模块
  */
 
-import 'dotenv/config';
-
 const args = process.argv.slice(2);
 const first = args[0];
 
