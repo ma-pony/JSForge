@@ -24,6 +24,27 @@ test('production manifest allows only the OpenCode runtime build', () => {
   assert.deepEqual(root.pnpm?.onlyBuiltDependencies, ['opencode-ai'])
 })
 
+test('manifest declares the Node floor required by the tested project graph', () => {
+  assert.equal(root.engines.node, '>=20.19.0')
+})
+
+test('publish jobs use the Node floor and frozen script-free installs', () => {
+  const workflow = fs.readFileSync(
+    new URL('../.github/workflows/publish.yml', import.meta.url),
+    'utf8'
+  )
+  assert.equal((workflow.match(/node-version: '20\.19'/g) || []).length, 2)
+  assert.equal(
+    (workflow.match(/pnpm install --frozen-lockfile --ignore-scripts/g) || []).length,
+    2
+  )
+})
+
+test('unit script uses the platform-independent top-level test runner', () => {
+  assert.equal(root.scripts.test, 'node scripts/run-unit-tests.mjs')
+  assert.equal(root.scripts['test:integration'], "node --test 'test/integration/*.test.js'")
+})
+
 test('CLI has no undeclared dotenv bootstrap', () => {
   const cli = fs.readFileSync(new URL('../bin/cli.js', import.meta.url), 'utf8')
   assert.doesNotMatch(cli, /dotenv\/config/)

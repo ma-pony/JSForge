@@ -1,7 +1,6 @@
 import { EventEmitter } from 'node:events'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { OpencodeRuntime } from '../src/agent/runtime.js'
@@ -206,81 +205,38 @@ test('close during pending readiness cannot transition runtime back to ready', a
   assert.equal(runtime.state, 'closed')
 })
 
-test('concurrent runtime starts serialize temporary PATH changes and restore the original PATH', async () => {
-  const originalPath = process.env.PATH
-  const firstEntered = deferred()
-  const firstRelease = deferred()
-  const secondEntered = deferred()
-  const seenPaths = []
-  const first = makeRuntimeWithReadyFakes(readyClient(), {
-    projectRoot: '/tmp/deepspider-runtime-first',
-    createOpencodeFn: async () => {
-      seenPaths.push(process.env.PATH)
-      firstEntered.resolve()
-      await firstRelease.promise
-      throw new Error('synthetic first create failure')
+test('close aborts a pending readiness sleep within a bounded time', async () => {
+  const sleepStarted = deferred()
+  const client = readyClient({
+    mcp: {
+      status: async () => ({ data: { deepspider: { status: 'connecting' } } }),
     },
-  }).runtime
-  const second = makeRuntimeWithReadyFakes(readyClient(), {
-    projectRoot: '/tmp/deepspider-runtime-second',
-    createOpencodeFn: async () => {
-      seenPaths.push(process.env.PATH)
-      secondEntered.resolve()
-      return { client: readyClient(), server: { url: 'http://127.0.0.1:45679', close() {} } }
+    tool: {
+      ids: async () => ({ data: [] }),
     },
-  }).runtime
-  let firstStart
-  let secondStart
-
-  try {
-    firstStart = first.start()
-    await firstEntered.promise
-    secondStart = second.start()
-    await Promise.resolve()
-    assert.equal(seenPaths.length, 1)
-
-    firstRelease.resolve()
-    await assert.rejects(firstStart, /synthetic first create failure/)
-    await secondEntered.promise
-    await secondStart
-
-    const seenBinDirectories = seenPaths.map((seenPath) => seenPath.split(path.delimiter)[0])
-    for (const seenPath of seenPaths) {
-      assert.equal(seenPath.split(path.delimiter).slice(1).join(path.delimiter), originalPath)
-    }
-    assert.notEqual(seenBinDirectories[0], seenBinDirectories[1])
-    assert.ok(seenBinDirectories.every((dir) => /deepspider-opencode-bin-/.test(dir)))
-    assert.ok(seenBinDirectories.every((dir) => !fs.existsSync(dir)))
-    assert.equal(process.env.PATH, originalPath)
-  } finally {
-    firstRelease.resolve()
-    await Promise.allSettled([firstStart, secondStart].filter(Boolean))
-    if (originalPath === undefined) delete process.env.PATH
-    else process.env.PATH = originalPath
-    await Promise.allSettled([first.close(), second.close()])
-  }
-})
-
-test('start resolves opencode directly to the packaged executable', async () => {
-  const originalPath = process.env.PATH
-  const { runtime } = makeRuntimeWithReadyFakes(readyClient(), {
-    createOpencodeFn: async () => {
-      const command = path.join(process.env.PATH.split(path.delimiter)[0], 'opencode')
-      assert.equal(fs.realpathSync(command), opencodeExecutable)
-      return {
-        client: readyClient(),
-        server: { url: 'http://127.0.0.1:45680', close() {} },
-      }
+  })
+  const { runtime } = makeRuntimeWithReadyFakes(client, {
+    sleepFn: (_milliseconds, signal) => {
+      sleepStarted.resolve()
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
     },
   })
 
-  try {
-    await runtime.start()
-  } finally {
-    await runtime.close()
-  }
+  const starting = runtime.start()
+  await sleepStarted.promise
+  await runtime.close()
+  const outcome = await Promise.race([
+    starting.then(
+      () => 'started',
+      (error) => error.code
+    ),
+    new Promise((resolve) => setTimeout(() => resolve('timed-out'), 100)),
+  ])
 
-  assert.equal(process.env.PATH, originalPath)
+  assert.equal(outcome, 'E_RUNTIME_CLOSED')
+  assert.equal(runtime.state, 'closed')
 })
 
 test('start rejects unsupported installed OpenCode versions before spawning', async () => {
@@ -299,7 +255,7 @@ test('start rejects unsupported installed OpenCode versions before spawning', as
   assert.equal(runtime.state, 'idle')
 })
 
-test('start sends the user session directory to every readiness API', async () => {
+test('start sends the user directory and Runtime signal to every readiness API', async () => {
   const directory = '/tmp/deepspider-user-project'
   const calls = []
   const client = {
@@ -338,12 +294,17 @@ test('start sends the user session directory to every readiness API', async () =
 
   await runtime.start()
 
+  const requestOptions = {
+    throwOnError: true,
+    signal: runtime.abortController.signal,
+  }
+
   assert.deepEqual(calls, [
-    ['health', { throwOnError: true }],
-    ['agent', { directory }, { throwOnError: true }],
-    ['skill', { directory }, { throwOnError: true }],
-    ['mcp', { directory }, { throwOnError: true }],
-    ['tool', { directory }, { throwOnError: true }],
+    ['health', requestOptions],
+    ['agent', { directory }, requestOptions],
+    ['skill', { directory }, requestOptions],
+    ['mcp', { directory }, requestOptions],
+    ['tool', { directory }, requestOptions],
   ])
 })
 
@@ -458,7 +419,9 @@ test('TUI handle waits for the child exit and close terminates it once', async (
 
   assert.equal(await exit, 7)
   assert.equal(killedWith, 'SIGTERM')
+  assert.equal(spawnCalls[0][0], opencodeExecutable)
   assert.deepEqual(spawnCalls[0].slice(1, 2), [['attach', 'http://127.0.0.1:45678']])
+  assert.equal(spawnCalls[0][2].shell, false)
 })
 
 test('TUI child errors are surfaced as an attach error', async () => {
@@ -472,101 +435,3 @@ test('TUI child errors are surfaced as an attach error', async () => {
 
   await assert.rejects(wait, (err) => err.code === 'E_TUI_ATTACH')
 })
-
-test('symlink setup failure releases the PATH lock for the next runtime', async () => {
-  const originalMkdtempSync = fs.mkdtempSync
-  const originalSymlinkSync = fs.symlinkSync
-  const temporaryDirectories = []
-  const symlinkError = new Error('synthetic symlink failure')
-  fs.mkdtempSync = (...args) => {
-    const directory = originalMkdtempSync(...args)
-    temporaryDirectories.push(directory)
-    return directory
-  }
-  fs.symlinkSync = () => {
-    throw symlinkError
-  }
-  const first = makeRuntimeWithReadyFakes().runtime
-  let firstError
-
-  try {
-    await first.start()
-  } catch (error) {
-    firstError = error
-  } finally {
-    fs.mkdtempSync = originalMkdtempSync
-    fs.symlinkSync = originalSymlinkSync
-  }
-
-  const second = makeRuntimeWithReadyFakes().runtime
-  let secondOutcome
-  try {
-    secondOutcome = await startsBeforeImmediate(second)
-  } finally {
-    await second.close()
-    for (const directory of temporaryDirectories) {
-      fs.rmSync(directory, { recursive: true, force: true })
-    }
-  }
-
-  assert.equal(firstError, symlinkError)
-  assert.equal(secondOutcome, 'started')
-})
-
-test('temp cleanup failure closes the created server and releases the PATH lock', async () => {
-  const originalMkdtempSync = fs.mkdtempSync
-  const originalRmSync = fs.rmSync
-  const temporaryDirectories = []
-  const cleanupError = new Error('synthetic temp cleanup failure')
-  fs.mkdtempSync = (...args) => {
-    const directory = originalMkdtempSync(...args)
-    temporaryDirectories.push(directory)
-    return directory
-  }
-  fs.rmSync = (directory, options) => {
-    if (directory === temporaryDirectories[0]) throw cleanupError
-    return originalRmSync(directory, options)
-  }
-  const server = {
-    closeCalls: 0,
-    url: 'http://127.0.0.1:45681',
-    close() {
-      this.closeCalls++
-    },
-  }
-  const first = makeRuntimeWithReadyFakes(readyClient(), {
-    createOpencodeFn: async () => ({ client: readyClient(), server }),
-  }).runtime
-  let firstError
-
-  try {
-    await first.start()
-  } catch (error) {
-    firstError = error
-  } finally {
-    fs.mkdtempSync = originalMkdtempSync
-    fs.rmSync = originalRmSync
-  }
-
-  const second = makeRuntimeWithReadyFakes().runtime
-  let secondOutcome
-  try {
-    secondOutcome = await startsBeforeImmediate(second)
-  } finally {
-    await second.close()
-    for (const directory of temporaryDirectories) {
-      originalRmSync(directory, { recursive: true, force: true })
-    }
-  }
-
-  assert.equal(firstError, cleanupError)
-  assert.equal(server.closeCalls, 1)
-  assert.equal(secondOutcome, 'started')
-})
-
-async function startsBeforeImmediate(runtime) {
-  return Promise.race([
-    runtime.start().then(() => 'started'),
-    new Promise((resolve) => globalThis.setImmediate(() => resolve('blocked'))),
-  ])
-}

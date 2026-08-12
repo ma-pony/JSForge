@@ -31,6 +31,8 @@
 
 ### 安装
 
+需要 Node.js 20.19 或更高版本。
+
 ```bash
 npm install -g deepspider
 ```

@@ -25,6 +25,8 @@ An end-to-end AI Agent solution from JS reverse engineering to production-ready 
 
 ### Installation
 
+Requires Node.js 20.19 or later.
+
 ```bash
 # Option 1: npm global install (recommended)
 npm install -g deepspider

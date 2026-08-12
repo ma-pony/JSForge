@@ -11,6 +11,13 @@ import fs from 'fs'
 import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 
+const LEARNED_FILES = Object.freeze({
+  crypto: 'crypto.md',
+  'anti-bot': 'anti-bot.md',
+  'env-patch': 'env-patch.md',
+  general: 'general.md',
+})
+
 /** @type {import("@opencode-ai/plugin").Plugin} */
 export default async ({ directory }) => {
   const packageRoot = path.resolve(
@@ -26,7 +33,7 @@ export default async ({ directory }) => {
         description: '记录新发现的逆向知识到 Skill 文件',
         args: {
           skill: z
-            .string()
+            .enum(['crypto', 'anti-bot', 'env-patch', 'general'])
             .describe('Target: crypto / anti-bot / env-patch / general'),
           category: z
             .string()
@@ -35,15 +42,11 @@ export default async ({ directory }) => {
           source: z.string().describe('Source URL or description'),
         },
         async execute(args) {
-          const learnedFile = path.join(
-            skillsDir,
-            'learned',
-            `${args.skill}.md`
-          )
-
-          if (!fs.existsSync(learnedFile)) {
+          const learnedName = LEARNED_FILES[args.skill]
+          if (!learnedName) {
             return `Error: unknown skill "${args.skill}". Valid: crypto, anti-bot, env-patch, general`
           }
+          const learnedFile = path.join(skillsDir, 'learned', learnedName)
 
           const entry = `\n### ${args.source}\n- **类别**: ${args.category}\n${args.content}\n`
           fs.appendFileSync(learnedFile, entry, 'utf-8')

@@ -6,11 +6,12 @@
  */
 
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { createOpencode } from '@opencode-ai/sdk/v2'
+import { createOpencodeClient } from '@opencode-ai/sdk/v2'
+import { resolveOpencodeBinary } from './opencode-binary.js'
 import { startTUI } from './tui.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -26,7 +27,111 @@ export const OPENCODE_PACKAGES = [
 
 const READY_ATTEMPTS = 40
 const READY_INTERVAL_MS = 250
-let pathCriticalSection = Promise.resolve()
+
+/**
+ * Launch the OpenCode server from the exact binary installed with DeepSpider.
+ *
+ * @param {object} options
+ * @param {string} [options.hostname]
+ * @param {number} [options.port]
+ * @param {number} [options.timeout]
+ * @param {AbortSignal} [options.signal]
+ * @param {object} [options.config]
+ * @param {object} [dependencies]
+ * @returns {Promise<{client: object, server: {url: string, close: () => void}}>}
+ */
+export async function launchInstalledOpencode(
+  options = {},
+  {
+    resolveBinaryFn = resolveOpencodeBinary,
+    spawnImpl = spawn,
+    createClientFn = createOpencodeClient,
+  } = {}
+) {
+  const hostname = options.hostname ?? '127.0.0.1'
+  const port = options.port ?? 4096
+  const timeout = options.timeout ?? 5000
+  const executable = resolveBinaryFn()
+  const args = ['serve', `--hostname=${hostname}`, `--port=${port}`]
+  if (options.config?.logLevel) args.push(`--log-level=${options.config.logLevel}`)
+
+  const child = spawnImpl(executable, args, {
+    env: {
+      ...process.env,
+      OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config ?? {}),
+    },
+    shell: false,
+  })
+
+  let clearAbort = () => {}
+  const url = await new Promise((resolve, reject) => {
+    let output = ''
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      clearAbort()
+      stopProcess(child)
+      reject(new Error(`Timeout waiting for server to start after ${timeout}ms`))
+    }, timeout)
+
+    const rejectOnce = (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      clearAbort()
+      reject(error)
+    }
+
+    child.stdout?.on('data', (chunk) => {
+      if (settled) return
+      output += chunk.toString()
+      for (const line of output.split('\n')) {
+        if (!line.startsWith('opencode server listening')) continue
+        const match = line.match(/on\s+(https?:\/\/[^\s]+)/)
+        if (!match) {
+          stopProcess(child)
+          rejectOnce(new Error(`Failed to parse server url from output: ${line}`))
+          return
+        }
+        settled = true
+        clearTimeout(timer)
+        resolve(match[1])
+        return
+      }
+    })
+    child.stderr?.on('data', (chunk) => {
+      output += chunk.toString()
+    })
+    child.once('exit', (code) => {
+      let message = `Server exited with code ${code}`
+      if (output.trim()) message += `\nServer output: ${output}`
+      rejectOnce(new Error(message))
+    })
+    child.once('error', rejectOnce)
+
+    if (options.signal) {
+      const abort = () => {
+        stopProcess(child)
+        rejectOnce(options.signal.reason ?? new Error('OpenCode server start aborted'))
+      }
+      clearAbort = () => options.signal.removeEventListener('abort', abort)
+      options.signal.addEventListener('abort', abort, { once: true })
+      if (options.signal.aborted) abort()
+    }
+  })
+
+  return {
+    client: createClientFn({ baseUrl: url }),
+    server: {
+      url,
+      close() {
+        clearAbort()
+        stopProcess(child)
+      },
+    },
+  }
+}
 
 /**
  * Assert that every OpenCode package installed with DeepSpider is the version
@@ -65,7 +170,7 @@ export function assertOpencodeVersions(readVersionsFn = readInstalledVersions) {
  * @param {string} [options.directory]
  * @param {string} [options.projectRoot]
  * @param {boolean} [options.verbose]
- * @param {typeof createOpencode} [options.createOpencodeFn]
+ * @param {typeof launchInstalledOpencode} [options.createOpencodeFn]
  * @param {typeof startTUI} [options.startTUIFn]
  * @param {() => Record<string, string>} [options.readVersionsFn]
  * @param {(milliseconds: number) => Promise<void>} [options.sleepFn]
@@ -76,7 +181,7 @@ export class OpencodeRuntime {
     directory = process.cwd(),
     projectRoot = PROJECT_ROOT,
     verbose = false,
-    createOpencodeFn = createOpencode,
+    createOpencodeFn = launchInstalledOpencode,
     startTUIFn = startTUI,
     readVersionsFn = readInstalledVersions,
     sleepFn = sleep,
@@ -194,33 +299,35 @@ export class OpencodeRuntime {
   }
 
   async _createServer() {
-    const packageRoot = path.dirname(require.resolve('opencode-ai/package.json'))
-    const executablePath = path.join(packageRoot, 'bin', 'opencode.exe')
-    return withPinnedOpencodePath(executablePath, () =>
-      this.createOpencodeFn({
-        hostname: '127.0.0.1',
-        port: 0,
-        timeout: 10000,
-        signal: this.abortController.signal,
-        config: this.config,
-      })
-    )
+    return this.createOpencodeFn({
+      hostname: '127.0.0.1',
+      port: 0,
+      timeout: 10000,
+      signal: this.abortController.signal,
+      config: this.config,
+    })
   }
 
   async _waitForReady() {
+    this._assertStarting()
     await this._checkHealth()
+    this._assertStarting()
     await this._checkAgent()
+    this._assertStarting()
     await this._checkSkill()
+    this._assertStarting()
     await this._waitForMcpAndTool()
   }
 
   async _checkHealth() {
     try {
-      const response = await this.client.v2.health.get({ throwOnError: true })
+      const response = await this.client.v2.health.get(this._requestOptions())
+      this._assertStarting()
       if (response?.data?.healthy !== true) {
         throw new Error('OpenCode health endpoint did not report healthy')
       }
     } catch (error) {
+      if (this._isClosed()) throw this._closedError()
       throw runtimeError('E_OPENCODE_HEALTH', error.message, error)
     }
   }
@@ -229,12 +336,14 @@ export class OpencodeRuntime {
     try {
       const response = await this.client.app.agents(
         { directory: this.directory },
-        { throwOnError: true }
+        this._requestOptions()
       )
+      this._assertStarting()
       if (!response?.data?.some((agent) => agent.name === 'spider')) {
         throw new Error('OpenCode agent spider is unavailable')
       }
     } catch (error) {
+      if (this._isClosed()) throw this._closedError()
       throw runtimeError('E_AGENT_NOT_READY', error.message, error)
     }
   }
@@ -243,12 +352,14 @@ export class OpencodeRuntime {
     try {
       const response = await this.client.app.skills(
         { directory: this.directory },
-        { throwOnError: true }
+        this._requestOptions()
       )
+      this._assertStarting()
       if (!response?.data?.some((skill) => skill.name === 'deepspider')) {
         throw new Error('DeepSpider skill is unavailable')
       }
     } catch (error) {
+      if (this._isClosed()) throw this._closedError()
       throw runtimeError('E_SKILL_NOT_READY', error.message, error)
     }
   }
@@ -259,31 +370,46 @@ export class OpencodeRuntime {
     let lastMcpError = null
 
     for (let attempt = 0; attempt < READY_ATTEMPTS; attempt++) {
+      this._assertStarting()
       try {
         const response = await this.client.mcp.status(
           { directory: this.directory },
-          { throwOnError: true }
+          this._requestOptions()
         )
+        this._assertStarting()
         const mcp = response?.data?.deepspider
         mcpReady = mcp?.status === 'connected'
         if (!mcpReady) lastMcpError = mcp?.error || `MCP status is ${mcp?.status || 'missing'}`
       } catch (error) {
+        if (this._isClosed()) throw this._closedError()
         mcpReady = false
         lastMcpError = error
       }
 
+      this._assertStarting()
       try {
         const response = await this.client.tool.ids(
           { directory: this.directory },
-          { throwOnError: true }
+          this._requestOptions()
         )
+        this._assertStarting()
         toolReady = response?.data?.includes('evolve_skill') === true
       } catch {
+        if (this._isClosed()) throw this._closedError()
         toolReady = false
       }
 
       if (mcpReady && toolReady) return
-      if (attempt < READY_ATTEMPTS - 1) await this.sleepFn(READY_INTERVAL_MS)
+      if (attempt < READY_ATTEMPTS - 1) {
+        this._assertStarting()
+        try {
+          await this.sleepFn(READY_INTERVAL_MS, this.abortController.signal)
+        } catch (error) {
+          if (this._isClosed()) throw this._closedError()
+          throw error
+        }
+        this._assertStarting()
+      }
     }
 
     if (!mcpReady) {
@@ -296,6 +422,25 @@ export class OpencodeRuntime {
     }
 
     throw runtimeError('E_PLUGIN_NOT_READY', 'DeepSpider plugin tool evolve_skill is unavailable')
+  }
+
+  _requestOptions() {
+    return {
+      throwOnError: true,
+      signal: this.abortController.signal,
+    }
+  }
+
+  _isClosed() {
+    return this.state !== 'starting' || this.abortController.signal.aborted
+  }
+
+  _assertStarting() {
+    if (this._isClosed()) throw this._closedError()
+  }
+
+  _closedError() {
+    return runtimeError('E_RUNTIME_CLOSED', 'OpenCode runtime was closed while becoming ready')
   }
 }
 
@@ -310,26 +455,15 @@ function readInstalledVersions() {
 }
 
 function resolvePackageJson(pkg) {
-  let entryPath
-  try {
-    entryPath = require.resolve(pkg.entry)
-  } catch (error) {
-    if (pkg.packageJson || error.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') throw error
-    entryPath = fileURLToPath(import.meta.resolve(pkg.entry))
+  if (pkg.packageJson) return require.resolve(pkg.entry)
+
+  const packageSegments = pkg.name.split('/')
+  for (const moduleDirectory of require.resolve.paths(pkg.name) ?? []) {
+    const packageJsonPath = path.join(moduleDirectory, ...packageSegments, 'package.json')
+    if (fs.existsSync(packageJsonPath)) return fs.realpathSync(packageJsonPath)
   }
 
-  if (pkg.packageJson) return entryPath
-
-  let directory = path.dirname(entryPath)
-  while (true) {
-    const packageJsonPath = path.join(directory, 'package.json')
-    if (fs.existsSync(packageJsonPath)) return packageJsonPath
-    const parent = path.dirname(directory)
-    if (parent === directory) {
-      throw new Error(`Unable to find package.json for ${pkg.name}`)
-    }
-    directory = parent
-  }
+  throw new Error(`Unable to find package.json for ${pkg.name}`)
 }
 
 function runtimeError(code, message, cause) {
@@ -338,75 +472,16 @@ function runtimeError(code, message, cause) {
   return error
 }
 
-async function withPinnedOpencodePath(executablePath, createOpencodeFn) {
-  const previous = pathCriticalSection
-  let release
-  pathCriticalSection = new Promise((resolve) => {
-    release = resolve
-  })
-  await previous
-
-  try {
-    let temporaryBinDirectory
-    let originalPath
-    let pathChanged = false
-    let created
-    let operationError
-
-    try {
-      let binDirectory = path.dirname(executablePath)
-      if (process.platform !== 'win32') {
-        temporaryBinDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-opencode-bin-'))
-        fs.symlinkSync(executablePath, path.join(temporaryBinDirectory, 'opencode'))
-        binDirectory = temporaryBinDirectory
-      }
-      originalPath = process.env.PATH
-      process.env.PATH = originalPath
-        ? `${binDirectory}${path.delimiter}${originalPath}`
-        : binDirectory
-      pathChanged = true
-      created = await createOpencodeFn()
-    } catch (error) {
-      operationError = error
-    }
-
-    const cleanupErrors = []
-    try {
-      if (pathChanged) {
-        if (originalPath === undefined) delete process.env.PATH
-        else process.env.PATH = originalPath
-      }
-    } catch (error) {
-      cleanupErrors.push(error)
-    } finally {
-      if (temporaryBinDirectory) {
-        try {
-          fs.rmSync(temporaryBinDirectory, { recursive: true, force: true })
-        } catch (error) {
-          cleanupErrors.push(error)
-        }
-      }
-    }
-
-    if (cleanupErrors.length > 0 && created?.server) {
-      try {
-        await created.server.close()
-      } catch (error) {
-        cleanupErrors.push(error)
-      }
-    }
-
-    const errors = [operationError, ...cleanupErrors].filter(Boolean)
-    if (errors.length === 1) throw errors[0]
-    if (errors.length > 1) {
-      throw new globalThis.AggregateError(errors, 'OpenCode temporary PATH cleanup failed', {
-        cause: operationError || cleanupErrors[0],
-      })
-    }
-    return created
-  } finally {
-    release()
+function stopProcess(child) {
+  if (child.exitCode != null || child.signalCode != null) return
+  if (process.platform === 'win32' && child.pid) {
+    const result = spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+      shell: false,
+      windowsHide: true,
+    })
+    if (!result.error && result.status === 0) return
   }
+  child.kill('SIGTERM')
 }
 
 function cleanupError(errors) {
@@ -414,6 +489,23 @@ function cleanupError(errors) {
   return new globalThis.AggregateError(errors, 'OpenCode runtime cleanup failed')
 }
 
-function sleep(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+function sleep(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason)
+      return
+    }
+
+    const timer = setTimeout(() => {
+      clear()
+      resolve()
+    }, milliseconds)
+    const abort = () => {
+      clearTimeout(timer)
+      clear()
+      reject(signal.reason)
+    }
+    const clear = () => signal?.removeEventListener('abort', abort)
+    signal?.addEventListener('abort', abort, { once: true })
+  })
 }

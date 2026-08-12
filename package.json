@@ -20,7 +20,7 @@
   "scripts": {
     "mcp": "node src/mcp/server.js",
     "cli": "node bin/cli.js",
-    "test": "node --test 'test/*.test.js'",
+    "test": "node scripts/run-unit-tests.mjs",
     "test:integration": "node --test 'test/integration/*.test.js'",
     "smoke:pack": "node scripts/smoke-packed-cli.mjs",
     "lint": "eslint src/",
@@ -50,7 +50,7 @@
     "url": "https://github.com/ma-pony/deepspider/issues"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.19.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

@@ -16,16 +16,12 @@
 import fs from 'fs'
 import path from 'path'
 import { spawnSync } from 'child_process'
-import { fileURLToPath } from 'url'
+import { resolveOpencodeBinary } from '../../agent/opencode-binary.js'
 import {
   prepareSandbox,
   applySandboxEnv,
   getSandboxPaths,
 } from '../../agent/sandbox.js'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const PROJECT_ROOT = path.resolve(__dirname, '../../..')
-const OPENCODE_BIN = path.join(PROJECT_ROOT, 'node_modules/.bin/opencode')
 
 export function run(args) {
   const sub = args[0] || 'list'
@@ -38,7 +34,7 @@ export function run(args) {
     case 'set-model':
       return setModel(args[1])
     case 'auth':
-      return auth(args.slice(1))
+      return runAuth(args.slice(1))
     case 'reset':
       return reset()
     default:
@@ -118,18 +114,35 @@ function setModel(model) {
   console.log(`位置: ${target}`)
 }
 
-function auth(rest) {
-  applySandboxEnv()
-  if (!fs.existsSync(OPENCODE_BIN)) {
-    console.error(`找不到 opencode 可执行文件: ${OPENCODE_BIN}`)
+export function runAuth(
+  rest,
+  {
+    applySandboxEnvFn = applySandboxEnv,
+    resolveBinaryFn = resolveOpencodeBinary,
+    existsSyncFn = fs.existsSync,
+    spawnSyncImpl = spawnSync,
+    exitFn = process.exit,
+  } = {}
+) {
+  applySandboxEnvFn()
+  const executable = resolveBinaryFn()
+  if (!existsSyncFn(executable)) {
+    console.error(`找不到 opencode 可执行文件: ${executable}`)
     console.error('请确认 deepspider 安装完整（pnpm install）')
-    process.exit(1)
+    exitFn(1)
+    return
   }
-  const result = spawnSync(OPENCODE_BIN, ['auth', ...rest], {
+  const result = spawnSyncImpl(executable, ['auth', ...rest], {
     stdio: 'inherit',
     env: process.env,
+    shell: false,
   })
-  process.exit(result.status ?? 0)
+  if (result.error) {
+    console.error(`[config] 无法启动 opencode auth：${result.error.message}`)
+    exitFn(1)
+    return
+  }
+  exitFn(Number.isInteger(result.status) ? result.status : 1)
 }
 
 function reset() {

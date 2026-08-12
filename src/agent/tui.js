@@ -4,12 +4,7 @@
  */
 
 import { spawn } from 'child_process'
-import path from 'path'
-import { fileURLToPath } from 'url'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const PROJECT_ROOT = path.resolve(__dirname, '../..')
-const OPENCODE_BIN = path.join(PROJECT_ROOT, 'node_modules/.bin/opencode')
+import { resolveOpencodeBinary } from './opencode-binary.js'
 
 /**
  * 启动 TUI：attach 到已启动的 opencode server
@@ -21,9 +16,13 @@ const OPENCODE_BIN = path.join(PROJECT_ROOT, 'node_modules/.bin/opencode')
  * @param {AbortSignal} [options.signal]
  * @param {boolean} [options.verbose]
  * @param {typeof spawn} [options.spawnImpl]
+ * @param {typeof resolveOpencodeBinary} [options.resolveBinaryFn]
  * @returns {{wait: () => Promise<number>, close: () => void}} 可控 TUI 句柄
  */
-export function startTUI(serverUrl, { signal, verbose, spawnImpl = spawn } = {}) {
+export function startTUI(
+  serverUrl,
+  { signal, verbose, spawnImpl = spawn, resolveBinaryFn = resolveOpencodeBinary } = {}
+) {
   if (!serverUrl) {
     throw new Error('server URL missing, cannot attach TUI')
   }
@@ -32,10 +31,11 @@ export function startTUI(serverUrl, { signal, verbose, spawnImpl = spawn } = {})
     console.error(`[tui] attaching to ${serverUrl}`)
   }
 
-  const child = spawnImpl(OPENCODE_BIN, ['attach', serverUrl], {
+  const child = spawnImpl(resolveBinaryFn(), ['attach', serverUrl], {
     stdio: 'inherit',
     env: process.env,
     signal,
+    shell: false,
   })
 
   const exitPromise = new Promise((resolve, reject) => {
