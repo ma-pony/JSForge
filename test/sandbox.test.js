@@ -154,6 +154,34 @@ test('rollback restores original auth file when symlink fails', () => {
   assert.equal(fs.readFileSync(paths.authJson, 'utf-8'), original)
 })
 
+test('rollback restores original auth symlink when replacement fails', () => {
+  resetSandboxFiles()
+  const paths = getSandboxPaths()
+  const oldTarget = path.join(TMP_HOME, 'old-auth.json')
+  const oldContent = '{"auth":"old"}\n'
+  fs.writeFileSync(oldTarget, oldContent)
+  fs.symlinkSync(oldTarget, paths.authJson)
+
+  const userDataDir = path.join(TMP_HOME, '.local', 'share', 'opencode')
+  fs.mkdirSync(userDataDir, { recursive: true })
+  fs.writeFileSync(path.join(userDataDir, 'auth.json'), '{"auth":"new"}\n')
+
+  const originalSymlink = fs.symlinkSync
+  fs.symlinkSync = function (_src, _dst) {
+    throw new Error('synthetic symlink failure')
+  }
+
+  try {
+    assert.throws(() => initSandbox('link-auth'), /synthetic symlink failure/)
+  } finally {
+    fs.symlinkSync = originalSymlink
+  }
+
+  assert.ok(fs.lstatSync(paths.authJson).isSymbolicLink())
+  assert.equal(fs.realpathSync(paths.authJson), fs.realpathSync(oldTarget))
+  assert.equal(fs.readFileSync(oldTarget, 'utf8'), oldContent)
+})
+
 test('legacy config symlink becomes an isolated local file', () => {
   resetSandboxFiles()
   prepareSandbox()

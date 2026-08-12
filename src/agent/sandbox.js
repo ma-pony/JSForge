@@ -157,11 +157,11 @@ export function initSandbox(mode = 'fresh') {
   }
 
   // 可能的来源：
-  //   1. 旧的软链接 —— 直接 unlink 替换。
+  //   1. 旧的软链接。
   //   2. 真实文件 —— 可能是用户之前跑过 `deepspider config auth login` 或
   //      `config set-model` 留下的。既然用户现在主动选择了 link 模式，就意味着
-  //      要用外部配置覆盖沙箱副本。为避免 EEXIST 让 agent 启动失败，把真实文件
-  //      先移到 .bak.<timestamp>，再创建链接。若后续 symlink 失败则回滚。
+  //      要用外部配置覆盖沙箱副本。为避免 EEXIST 让 agent 启动失败，先将旧目标
+  //      移到 .bak.<timestamp>，再创建链接。若后续 symlink 失败则回滚。
   const bakSuffix = `.bak.${Date.now()}`
   const backups = [] // { dst, bak }  用于失败回滚
   const createdLinks = [] // 用于失败回滚
@@ -172,9 +172,7 @@ export function initSandbox(mode = 'fresh') {
       // 先处理已存在的 dst
       try {
         const st = fs.lstatSync(dst)
-        if (st.isSymbolicLink()) {
-          fs.unlinkSync(dst)
-        } else if (st.isFile()) {
+        if (st.isSymbolicLink() || st.isFile()) {
           const bak = dst + bakSuffix
           fs.renameSync(dst, bak)
           backups.push({ dst, bak })
