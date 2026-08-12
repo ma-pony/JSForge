@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream'
 import {
   ask,
   reportAgentCleanupError,
+  reportAgentError,
   reportAgentStartupFailure,
   selectAgentExitCode,
   selectInitMode,
@@ -59,4 +60,25 @@ test('signal exit codes are not replaced by TUI exit codes', () => {
   assert.equal(selectAgentExitCode(130, 0), 130)
   assert.equal(selectAgentExitCode(143, 0), 143)
   assert.equal(selectAgentExitCode(undefined, 2), 2)
+})
+
+test('signal cancellation reports only its cleanup failure and retains the signal exit code', () => {
+  const messages = []
+  const reported = new Set()
+  const cleanupError = new Error('server cleanup failed')
+  const cancelled = Object.assign(new Error('Agent 启动已取消 (SIGTERM)'), {
+    code: 'E_AGENT_CANCELLED',
+    exitCode: 143,
+    cleanupError,
+  })
+
+  const exitCode = reportAgentError(cancelled, {
+    signalExitCode: 143,
+    reportedCleanupErrors: reported,
+    write: (message) => messages.push(message),
+  })
+  reportAgentCleanupError(cleanupError, reported, (message) => messages.push(message))
+
+  assert.equal(exitCode, 143)
+  assert.deepEqual(messages, ['❌ Agent 清理失败: server cleanup failed'])
 })

@@ -50,7 +50,7 @@ switch (first) {
     // 启动独立 Agent
     const {
       reportAgentCleanupError,
-      reportAgentStartupFailure,
+      reportAgentError,
       selectAgentExitCode,
       startAgent,
     } = await import('../src/agent/index.js');
@@ -95,8 +95,12 @@ switch (first) {
           console.error('');
           console.error('已取消。');
         }
-      } else if (signalExitCode == null) {
-        process.exitCode = reportAgentStartupFailure(err, { verbose, reportedCleanupErrors });
+      } else {
+        process.exitCode = reportAgentError(err, {
+          signalExitCode,
+          verbose,
+          reportedCleanupErrors,
+        });
       }
     } finally {
       process.removeListener('SIGINT', onSigint);

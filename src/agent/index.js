@@ -86,7 +86,7 @@ export function selectAgentExitCode(currentExitCode, tuiExitCode) {
 export function reportAgentCleanupError(error, reportedErrors, write = console.error) {
   if (!error || reportedErrors.has(error)) return false
   reportedErrors.add(error)
-  write(`❌ Agent 清理失败: ${error.message}`)
+  writeSafely(write, `❌ Agent 清理失败: ${error.message}`)
   return true
 }
 
@@ -94,10 +94,21 @@ export function reportAgentStartupFailure(
   error,
   { verbose = false, reportedCleanupErrors = new Set(), write = console.error } = {}
 ) {
-  write(`❌ Agent 启动失败: ${error.message}`)
+  writeSafely(write, `❌ Agent 启动失败: ${error.message}`)
   reportAgentCleanupError(error.cleanupError, reportedCleanupErrors, write)
-  if (verbose && error.stack) write(error.stack)
+  if (verbose && error.stack) writeSafely(write, error.stack)
   return error.exitCode || 1
+}
+
+export function reportAgentError(
+  error,
+  { signalExitCode, verbose = false, reportedCleanupErrors = new Set(), write = console.error } = {}
+) {
+  if (signalExitCode != null) {
+    reportAgentCleanupError(error.cleanupError, reportedCleanupErrors, write)
+    return signalExitCode
+  }
+  return reportAgentStartupFailure(error, { verbose, reportedCleanupErrors, write })
 }
 
 async function promptInitMode(existing, signal) {
@@ -207,4 +218,12 @@ function signalExitCode(reason) {
 
 function signalLabel(reason) {
   return reason?.signal || 'abort'
+}
+
+function writeSafely(write, message) {
+  try {
+    write(message)
+  } catch {
+    // Reporting must not turn a handled shutdown into an unhandled rejection.
+  }
 }
