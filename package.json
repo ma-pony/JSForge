@@ -70,5 +70,10 @@
   },
   "lint-staged": {
     "*.js": "eslint --fix"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "opencode-ai"
+    ]
   }
 }
