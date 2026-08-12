@@ -3,235 +3,285 @@
 [![npm version](https://img.shields.io/npm/v/deepspider.svg)](https://www.npmjs.com/package/deepspider)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> Intelligent Web Scraping Platform — AI-powered Crawler Agent built on DeepAgents + Patchright
+> An AI-native JavaScript reverse-engineering platform—from real request evidence to recovered algorithms and runnable crawler code.
 
-An end-to-end AI Agent solution from JS reverse engineering to production-ready crawler scripts.
+DeepSpider combines an OpenCode Agent, a Patchright browser, and Chrome DevTools Protocol (CDP) into one reverse-engineering workbench. It is more than a code-generating assistant: the Agent can operate a real page, capture network traffic and scripts, install hooks and breakpoints, collect the browser environment, and validate the final implementation against real requests.
 
-[中文文档](README.md)
+[中文](README.md)
 
-## Features
+## Core features
 
-- **AI-Driven Architecture**: Directly understands JS source code without AST parsing or deobfuscation preprocessing
-- **HTTP Fast Request**: Lightweight HTTP mode with TLS fingerprint spoofing, no browser needed
-- **Reverse Engineering**: AI understands obfuscated code, identifies encryption algorithms, generates Python implementation
-- **Dynamic Debugging**: Real browser + CDP breakpoint debugging, Hook injection
-- **CAPTCHA Handling**: Slider, click-based, and image CAPTCHAs
-- **Anti-Detection**: Fingerprint spoofing, proxy rotation, risk control evasion
-- **Crawler Orchestration**: AI generates complete runnable Python crawler projects
-- **Interactive Panel**: Built-in browser analysis panel with element selection and chat
-- **Real-time Progress**: Streaming output shows tool calls and analysis progress
+### AI-driven, evidence-grounded
 
-## Quick Start
+- **Real traffic first**: reproduce the request in a browser, then follow its Initiator, call stack, and script source to the parameter write boundary.
+- **Understands protected code**: combines runtime evidence with Agent analysis for Webpack, dynamic execution, VM obfuscation, WebAssembly, and common cryptographic chains.
+- **Progressive analysis**: loads the relevant experience and references for the current stage instead of flooding the context with unrelated material.
+- **Multi-sample validation**: compares browser, Node.js, Python, and real-request results before handoff, reducing implementations that run but produce the wrong output.
 
-### Installation
+### Real browser + CDP
 
-Requires Node.js 20.19 or later.
+- Patchright is the sole browser foundation and provides page automation in an anti-detection browser environment.
+- Deep CDP integration captures requests, responses, scripts, WebSockets, console output, DOM state, storage, and call stacks.
+- Supports hook injection, XHR and source-text breakpoints, stepping, variable evaluation, and anti-debug controls.
+- Exports browser state and environment-rebuild bundles for reproducing algorithms that depend on browser objects.
+
+### From analysis to runnable delivery
+
+- Bundles a Spider Agent and the eight-stage `intake → evidence → locate → recover → runtime → extraction → validation → handoff` workflow.
+- Persists request chains, session state, algorithm code, fixtures, verification records, and crawler projects for each task.
+- Runs as a standalone OpenCode TUI or as an MCP Server for clients such as Claude Code.
+- Includes a lightweight CycleTLS mode for one-off HTTP requests that do not need a browser.
+
+## What it is built for
+
+- Finding where a request `sign`, token, encrypted body, or dynamic header is generated.
+- Tracing critical logic through obfuscated JavaScript, Webpack chunks, Workers, WebAssembly, or VM-based protection.
+- Observing algorithm inputs and outputs, removing browser dependencies, and porting the result to Python or standalone JavaScript.
+- Analyzing WebSocket protocols, frontend request chains, anti-debugging behavior, and normal-versus-risk-control execution paths.
+- Turning verified reverse-engineering results into a runnable crawler project instead of leaving them as isolated snippets.
+
+## Quick start
+
+Node.js `20.19.0` or later is required. Installation downloads Chromium through Patchright.
 
 ```bash
-# Option 1: npm global install (recommended)
 npm install -g deepspider
-
-# Option 2: pnpm global install
-pnpm approve-builds -g deepspider isolated-vm  # Approve native build scripts on first install
-pnpm install -g deepspider
-
-# Option 3: Clone the repository
-git clone https://github.com/ma-pony/deepspider.git
-cd deepspider
-pnpm install
-cp .env.example .env  # Configure environment variables
-pnpm run setup:crypto  # Install Python crypto libraries (optional)
+deepspider --version
 ```
 
-On first run, you'll be prompted to configure the LLM API.
-
-> **Note**: This project depends on the `isolated-vm` native module, which requires a C++ build environment:
-> - macOS: `xcode-select --install`
-> - Ubuntu: `sudo apt install build-essential`
-> - Windows: Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-
-### Configuration
-
-DeepSpider supports Anthropic-compatible API providers. Claude API is recommended for best results.
-
-| Config Key | Environment Variable | Description |
-|------------|---------------------|-------------|
-| `apiKey` | `DEEPSPIDER_API_KEY` | API key |
-| `baseUrl` | `DEEPSPIDER_BASE_URL` | API endpoint URL |
-| `model` | `DEEPSPIDER_MODEL` | Model name |
-| `persistBrowserData` | `DEEPSPIDER_PERSIST_BROWSER` | Persist browser data (keep login sessions) |
-
-Priority: Environment variables > Config file (`~/.deepspider/config/settings.json`) > Defaults
-
-**Option 1: CLI commands (recommended)**
+Start the Agent for the first time:
 
 ```bash
-deepspider config set apiKey sk-ant-api03-xxx
-deepspider config set baseUrl https://api.anthropic.com
-deepspider config set model claude-opus-4-6
+deepspider agent
 ```
 
-**Option 2: Environment variables**
+The first run opens the OpenCode sandbox setup wizard with two choices:
+
+- `link-auth`: reuse only existing OpenCode login credentials.
+- `fresh`: create a completely isolated empty sandbox.
+
+After setup, the OpenCode TUI opens. Describe the target and expected output directly, for example:
+
+```text
+Analyze the requests made by https://example.com/search, recover how the sign
+parameter is generated, validate it, and provide a Python implementation with
+a runnable request example.
+```
+
+Press `Ctrl+C` to stop the TUI, DeepSpider MCP, and OpenCode Server together.
+
+## Usage
+
+### 1. Standalone Agent
 
 ```bash
-export DEEPSPIDER_API_KEY=sk-ant-api03-xxx
-export DEEPSPIDER_BASE_URL=https://api.anthropic.com
-export DEEPSPIDER_MODEL=claude-opus-4-6
+# Use the sandbox default model
+deepspider agent
+
+# Override the model for this run
+deepspider agent --model deepseek/deepseek-chat
+
+# Print detailed startup logs
+deepspider agent --verbose
 ```
 
-> **Note**: Other Anthropic-compatible API providers are also supported.
+At startup, the Agent checks OpenCode, the Spider Agent, the DeepSpider Skill, Plugin tools, and the MCP connection. The TUI opens only after everything is ready.
 
-### Usage
+### 2. MCP Server
 
-#### Global install (npm/pnpm install -g)
+After a global installation, register DeepSpider with Claude Code:
 
 ```bash
-# Start Agent - specify target website
-deepspider https://example.com
-
-# Fast HTTP request (lightweight, no browser needed)
-deepspider fetch https://example.com
-
-# Start Agent - persist browser data (one-time)
-deepspider --persist https://example.com
-
-# Start Agent - interactive mode only
-deepspider
-
-# Show help
-deepspider --help
-
-# Manage configuration
-deepspider config list            # List all settings
-deepspider config set apiKey sk-xxx
-deepspider config set model gpt-4o
-
-# Persist browser data (for sites requiring login, auto-restores session on next launch)
-deepspider config set persistBrowserData true
-
-# Check for updates
-deepspider update
+claude mcp add deepspider deepspider-mcp
 ```
 
-#### Clone repository
+You can also start the stdio MCP Server directly:
 
 ```bash
-# Configure (pick one)
-cp .env.example .env  # Edit .env file
-# or use CLI commands
-node bin/cli.js config set apiKey sk-xxx
-node bin/cli.js config set baseUrl https://api.openai.com/v1
-node bin/cli.js config set model gpt-4o
-
-# Install Python dependencies (optional, for running generated Python code)
-pnpm run setup:crypto
-
-# Start Agent
-pnpm run agent https://example.com
-
-# MCP service (for Claude Code, etc.)
-pnpm run mcp
-
-# Run tests
-pnpm test
+deepspider mcp
 ```
 
-### Workflow
+### 3. Lightweight HTTP request
 
-1. **Launch**: `deepspider https://target-site.com`
-2. **Wait**: Browser opens, system automatically records data (no API cost)
-3. **Interact**: Log in, paginate, trigger target requests on the website
-4. **Select**: Click the panel's select button ⦿ to enter selection mode
-5. **Analyze**: Click on target data elements, choose a quick action:
-   - **Trace Data Source** — Locate the API endpoint for the selected data
-   - **Analyze Encryption** — Identify and reverse-engineer encrypted parameters
-   - **Full Analysis & Generate Crawler** — End-to-end: reverse, verify, generate code
-   - **Extract Page Structure** — Analyze DOM structure, generate selectors and field configs
-6. **Chat**: Continue asking questions in the panel or CLI for deeper analysis
+```bash
+deepspider fetch https://httpbin.org/get
+```
+
+`fetch` sends one HTTP request through CycleTLS. It does not launch Patchright or enter the Agent workflow.
+
+## OpenCode configuration
+
+DeepSpider no longer maintains a second model and provider configuration system. OpenCode manages these settings inside an isolated sandbox:
+
+```text
+~/.deepspider/opencode-sandbox/
+├── config/opencode/opencode.json
+├── data/opencode/auth.json
+├── cache/
+└── state/
+```
+
+Common commands:
+
+```bash
+# Log in to a provider / inspect login state
+deepspider config auth login
+deepspider config auth list
+
+# Set the default model
+deepspider config set-model anthropic/claude-sonnet-4-5
+
+# Inspect the current configuration and sandbox path
+deepspider config list
+deepspider config path
+
+# Clear the sandbox; the next launch runs setup again
+deepspider config reset
+```
+
+For advanced provider or base URL settings, edit the sandbox `opencode.json` using the native OpenCode format. DeepSpider does not merge project-level OpenCode configuration into this sandbox.
+
+## Eight-stage reverse-engineering workflow
+
+```text
+intake → evidence → locate → recover → runtime → extraction → validation → handoff
+```
+
+| Stage | Core task | Main output |
+| --- | --- | --- |
+| intake | Define the target request, trigger path, and delivery requirements | Structured requirements |
+| evidence | Trigger and confirm the target request on the real page | Draft `request-chain.md` |
+| locate | Follow the call chain to the parameter write boundary | Complete request evidence |
+| recover | Recover the bridge contract or critical operators | Encryption function code |
+| runtime | Find the first browser/local runtime divergence | Minimal environment patches |
+| extraction | Separate the core algorithm from its runtime | `pure-crypto.js` and fixtures |
+| validation | Compare Node.js, Python, and real requests with multiple inputs | `verification-record.md` |
+| handoff | Assemble runnable deliverables | Python crawler project and configuration |
+
+DeepSpider's evidence gate requires four steps before analysis: open the target page, perform the trigger action, capture the real request, and inspect the complete request and response. Every later conclusion must trace back to this evidence rather than guessing an algorithm from a parameter name.
+
+## MCP capabilities
+
+The current release registers 51 tools in eight groups:
+
+| Group | Example capabilities |
+| --- | --- |
+| Browser | Page actions, iframe/tab switching, screenshots, DOM, storage, console |
+| Network | Requests and responses, Initiator data, WebSocket connections and messages |
+| Script | Script inventory, source retrieval, cross-script search |
+| Debugger | Breakpoints, call stacks, stepping, variable evaluation, logpoints |
+| Hook | Hook injection plus reading and searching runtime samples |
+| Capture | Browser environment and property collection |
+| Rebuild | Environment-bundle export and dependency comparison |
+| Stealth | Anti-debug interception control |
+
+The bundled Spider Agent can orchestrate these tools automatically, or an MCP client can call them directly.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   DeepSpider                        │
-│         (Main Agent - AI-Driven Smart Routing)      │
-└──────────────────────┬──────────────────────────────┘
-                       │ On-demand invocation
-       ┌───────────────┼───────────────┐
-       ▼               ▼               ▼
-┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-│reverse-agent│ │captcha-agent│ │anti-detect  │
-│ AI analyzes │ │ CAPTCHA     │ │ Anti-detect │
-│ & generates │ │             │ │             │
-└─────────────┘ └─────────────┘ └─────────────┘
-       │
-       ▼
-┌─────────────┐
-│crawler-agent│
-│ AI generates│
-└─────────────┘
+```text
+DeepSpider CLI
+├── Agent
+│   └── OpenCode V2 Runtime
+│       ├── Spider Agent + DeepSpider Skill
+│       ├── eight-stage workflow + official OpenCode TUI
+│       └── DeepSpider Plugin + MCP
+│           └── Patchright + CDP + DataStore
+├── MCP Server (stdio)
+│   └── 51 browser and reverse-engineering tools
+└── fetch
+    └── CycleTLS
 ```
 
-### Sub-Agent System (v2.0 - AI-Driven)
+The Agent works in the directory where the command is launched, so generated projects and local file operations stay within the user's current workspace. The DeepSpider installation directory only supplies the bundled Agent, Skill, Plugin, MCP Server, and pinned OpenCode Runtime.
 
-| Sub-Agent | Responsibility | Core Tools |
-|-----------|---------------|------------|
-| crawler | AI generates complete crawler projects | ai, file, store |
-| reverse | AI understands JS source and generates Python | ai, tracing, debug, capture, python |
-| captcha | CAPTCHA handling: OCR, slider, click-based | captcha_ocr, captcha_slide |
-| anti-detect | Anti-detection: fingerprint, proxy pool | proxy, fingerprint |
+## Project structure
 
-**Architecture Advantages**:
-- Old: 10+ steps (AST parsing → deobfuscation → extraction → conversion → generation)
-- New: 3 steps (get source → AI analysis → validation)
-- AI directly understands obfuscated code without preprocessing
-
-## Project Structure
-
-```
+```text
 deepspider/
-├── bin/cli.js               # CLI entry (command routing)
+├── bin/cli.js                  # CLI entry point
+├── agents/spider.md            # Spider Agent definition
+├── skills/deepspider/          # Eight-stage skill, templates, and progressive references
+├── plugins/deepspider-plugin/  # OpenCode Plugin
 ├── src/
-│   ├── agent/               # DeepAgent system
-│   │   ├── tools/           # Tool collection (42)
-│   │   ├── subagents/       # Sub-agents
-│   │   ├── skills/          # Domain skills
-│   │   └── prompts/         # System prompts
-│   ├── cli/                 # CLI commands
-│   │   ├── config.js        # Config re-export
-│   │   └── commands/        # Sub-commands (version/help/config/update)
-│   ├── config/              # Core configuration
-│   │   ├── paths.js         # Path constants
-│   │   └── settings.js      # Config read/write (env vars/file/defaults)
-│   ├── browser/             # Browser runtime
-│   │   ├── client.js        # Patchright client
-│   │   ├── cdp.js           # CDP session management
-│   │   ├── defaultHooks.js  # Default injected Hooks
-│   │   ├── interceptors/    # CDP interceptors
-│   │   └── ui/              # In-browser UI panel
-│   ├── analyzer/            # Static analyzer
-│   ├── env/                 # Environment patching
-│   ├── store/               # Data storage
-│   └── mcp/                 # MCP service
-└── test/                    # Tests
+│   ├── agent/                  # OpenCode sandbox, Runtime, and TUI
+│   ├── browser/                # Patchright, CDP, collectors, and interceptors
+│   ├── mcp/                    # MCP Server and 51 tools
+│   ├── store/                  # Request, response, script, and knowledge storage
+│   ├── env/                    # Browser environment capture and rebuild modules
+│   └── cli/                    # config, fetch, update, and other commands
+├── scripts/                    # Test and package smoke scripts
+└── test/                       # Unit and real integration tests
 ```
 
-## Core Technologies
+## Run from source
 
-- **DeepAgents**: Multi-agent collaboration framework
-- **Patchright**: Anti-detection browser automation
-- **CDP**: Chrome DevTools Protocol deep integration
-- **webcrack**: Webpack/Browserify unpacking
-- **isolated-vm**: Secure sandbox execution
+```bash
+git clone https://github.com/ma-pony/deepspider.git
+cd deepspider
+pnpm install
 
-## Documentation
+node bin/cli.js agent
+node bin/cli.js --help
+```
 
-- [Development Guide](docs/GUIDE.md)
-- [Debug Guide](docs/DEBUG.md)
+In a source checkout, commands documented with the `deepspider` prefix can also be run through `node bin/cli.js`:
 
-## Contributing
+```bash
+node bin/cli.js config auth login
+node bin/cli.js config set-model anthropic/claude-sonnet-4-5
+node bin/cli.js fetch https://httpbin.org/get
+```
 
-Issues and Pull Requests are welcome!
+Optional Python cryptography environment:
+
+```bash
+pnpm setup:crypto
+```
+
+## Environment variables and data directories
+
+The browser runtime supports two environment variables:
+
+```bash
+# Headless mode; default false
+export DEEPSPIDER_HEADLESS=true
+
+# Optional: reuse a specific browser profile
+export DEEPSPIDER_USER_DATA_DIR=/absolute/path/to/browser-profile
+```
+
+DeepSpider does not automatically load a project-root `.env` file. A persistent profile may contain authenticated sessions and should only use a trusted directory with controlled permissions.
+
+Main data is stored under `~/.deepspider/`:
+
+```text
+~/.deepspider/
+├── opencode-sandbox/       # OpenCode configuration, credentials, cache, and state
+├── data/sites/             # Per-site request, response, and script evidence
+├── store/                  # Local knowledge and pattern data
+├── output/                 # Reports, algorithms, screenshots, and crawler deliverables
+├── rebuild/                # Environment-rebuild bundles
+└── browser-data/           # Optional persistent browser data
+```
+
+## Development and verification
+
+```bash
+pnpm test              # Unit tests
+pnpm lint              # ESLint
+pnpm test:integration  # OpenCode and real Chromium integration tests
+pnpm smoke:pack        # Install the package in an empty directory and verify it
+npm pack --dry-run     # Inspect the npm package contents
+```
+
+Browser integration tests require Patchright Chromium and an environment that allows local headless Chromium child processes.
+
+## Current boundaries
+
+- LLM providers, models, and login credentials are managed by OpenCode. DeepSpider does not bundle any account.
+- Proxy pools, CAPTCHA recognition, and task scheduling are not delivered as built-in capabilities in the current release.
+- Only analyze targets that you own or are authorized to assess, and follow the target's terms and applicable laws.
 
 ## License
 
