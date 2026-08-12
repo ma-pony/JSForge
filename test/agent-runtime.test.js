@@ -472,3 +472,101 @@ test('TUI child errors are surfaced as an attach error', async () => {
 
   await assert.rejects(wait, (err) => err.code === 'E_TUI_ATTACH')
 })
+
+test('symlink setup failure releases the PATH lock for the next runtime', async () => {
+  const originalMkdtempSync = fs.mkdtempSync
+  const originalSymlinkSync = fs.symlinkSync
+  const temporaryDirectories = []
+  const symlinkError = new Error('synthetic symlink failure')
+  fs.mkdtempSync = (...args) => {
+    const directory = originalMkdtempSync(...args)
+    temporaryDirectories.push(directory)
+    return directory
+  }
+  fs.symlinkSync = () => {
+    throw symlinkError
+  }
+  const first = makeRuntimeWithReadyFakes().runtime
+  let firstError
+
+  try {
+    await first.start()
+  } catch (error) {
+    firstError = error
+  } finally {
+    fs.mkdtempSync = originalMkdtempSync
+    fs.symlinkSync = originalSymlinkSync
+  }
+
+  const second = makeRuntimeWithReadyFakes().runtime
+  let secondOutcome
+  try {
+    secondOutcome = await startsBeforeImmediate(second)
+  } finally {
+    await second.close()
+    for (const directory of temporaryDirectories) {
+      fs.rmSync(directory, { recursive: true, force: true })
+    }
+  }
+
+  assert.equal(firstError, symlinkError)
+  assert.equal(secondOutcome, 'started')
+})
+
+test('temp cleanup failure closes the created server and releases the PATH lock', async () => {
+  const originalMkdtempSync = fs.mkdtempSync
+  const originalRmSync = fs.rmSync
+  const temporaryDirectories = []
+  const cleanupError = new Error('synthetic temp cleanup failure')
+  fs.mkdtempSync = (...args) => {
+    const directory = originalMkdtempSync(...args)
+    temporaryDirectories.push(directory)
+    return directory
+  }
+  fs.rmSync = (directory, options) => {
+    if (directory === temporaryDirectories[0]) throw cleanupError
+    return originalRmSync(directory, options)
+  }
+  const server = {
+    closeCalls: 0,
+    url: 'http://127.0.0.1:45681',
+    close() {
+      this.closeCalls++
+    },
+  }
+  const first = makeRuntimeWithReadyFakes(readyClient(), {
+    createOpencodeFn: async () => ({ client: readyClient(), server }),
+  }).runtime
+  let firstError
+
+  try {
+    await first.start()
+  } catch (error) {
+    firstError = error
+  } finally {
+    fs.mkdtempSync = originalMkdtempSync
+    fs.rmSync = originalRmSync
+  }
+
+  const second = makeRuntimeWithReadyFakes().runtime
+  let secondOutcome
+  try {
+    secondOutcome = await startsBeforeImmediate(second)
+  } finally {
+    await second.close()
+    for (const directory of temporaryDirectories) {
+      originalRmSync(directory, { recursive: true, force: true })
+    }
+  }
+
+  assert.equal(firstError, cleanupError)
+  assert.equal(server.closeCalls, 1)
+  assert.equal(secondOutcome, 'started')
+})
+
+async function startsBeforeImmediate(runtime) {
+  return Promise.race([
+    runtime.start().then(() => 'started'),
+    new Promise((resolve) => globalThis.setImmediate(() => resolve('blocked'))),
+  ])
+}

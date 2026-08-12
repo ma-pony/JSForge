@@ -22,9 +22,10 @@ try {
     cwd: installDir,
     stdio: 'inherit',
   })
-  const cliPath = path.join(installDir, 'node_modules', '.bin', 'deepspider')
-  const version = execFileSync(cliPath, ['--version'], { encoding: 'utf8' })
-  const help = execFileSync(cliPath, ['--help'], { encoding: 'utf8' })
+  const installedPackageRoot = path.join(installDir, 'node_modules', 'deepspider')
+  const cliPath = path.join(installedPackageRoot, 'bin', 'cli.js')
+  const version = execFileSync(process.execPath, [cliPath, '--version'], { encoding: 'utf8' })
+  const help = execFileSync(process.execPath, [cliPath, '--help'], { encoding: 'utf8' })
   assert.match(version, /1\.0\.0-beta/)
   assert.match(help, /deepspider agent/)
 } finally {

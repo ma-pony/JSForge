@@ -346,26 +346,65 @@ async function withPinnedOpencodePath(executablePath, createOpencodeFn) {
   })
   await previous
 
-  let temporaryBinDirectory
-  let binDirectory = path.dirname(executablePath)
-  if (process.platform !== 'win32') {
-    temporaryBinDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-opencode-bin-'))
-    fs.symlinkSync(executablePath, path.join(temporaryBinDirectory, 'opencode'))
-    binDirectory = temporaryBinDirectory
-  }
-  const originalPath = process.env.PATH
-  process.env.PATH = originalPath
-    ? `${binDirectory}${path.delimiter}${originalPath}`
-    : binDirectory
-
   try {
-    return await createOpencodeFn()
-  } finally {
-    if (originalPath === undefined) delete process.env.PATH
-    else process.env.PATH = originalPath
-    if (temporaryBinDirectory) {
-      fs.rmSync(temporaryBinDirectory, { recursive: true, force: true })
+    let temporaryBinDirectory
+    let originalPath
+    let pathChanged = false
+    let created
+    let operationError
+
+    try {
+      let binDirectory = path.dirname(executablePath)
+      if (process.platform !== 'win32') {
+        temporaryBinDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-opencode-bin-'))
+        fs.symlinkSync(executablePath, path.join(temporaryBinDirectory, 'opencode'))
+        binDirectory = temporaryBinDirectory
+      }
+      originalPath = process.env.PATH
+      process.env.PATH = originalPath
+        ? `${binDirectory}${path.delimiter}${originalPath}`
+        : binDirectory
+      pathChanged = true
+      created = await createOpencodeFn()
+    } catch (error) {
+      operationError = error
     }
+
+    const cleanupErrors = []
+    try {
+      if (pathChanged) {
+        if (originalPath === undefined) delete process.env.PATH
+        else process.env.PATH = originalPath
+      }
+    } catch (error) {
+      cleanupErrors.push(error)
+    } finally {
+      if (temporaryBinDirectory) {
+        try {
+          fs.rmSync(temporaryBinDirectory, { recursive: true, force: true })
+        } catch (error) {
+          cleanupErrors.push(error)
+        }
+      }
+    }
+
+    if (cleanupErrors.length > 0 && created?.server) {
+      try {
+        await created.server.close()
+      } catch (error) {
+        cleanupErrors.push(error)
+      }
+    }
+
+    const errors = [operationError, ...cleanupErrors].filter(Boolean)
+    if (errors.length === 1) throw errors[0]
+    if (errors.length > 1) {
+      throw new globalThis.AggregateError(errors, 'OpenCode temporary PATH cleanup failed', {
+        cause: operationError || cleanupErrors[0],
+      })
+    }
+    return created
+  } finally {
     release()
   }
 }
