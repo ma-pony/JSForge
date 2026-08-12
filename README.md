@@ -45,7 +45,7 @@ DeepSpider 不维护自己的配置文件。所有 provider / model / 凭据都�
 └── data/opencode/auth.json         # 登录凭据
 ```
 
-**首次运行 `deepspider agent` 会弹出初始化向导**：如果你本机已经装过 opencode，可以选择把 `opencode.json` 和 `auth.json` 软链接过来复用，也可以只链接 `auth.json`（配置独立、凭据共享），或者创建全新空沙箱。
+**首次运行 `deepspider agent` 会弹出初始化向导**。初始化只提供两种模式：`link-auth` 仅复用已有 OpenCode `auth.json`，`fresh` 使用全新空沙箱。`opencode.json` 始终保留在 DeepSpider 沙箱内，不链接全局配置。
 
 之后的日常操作：
 
@@ -73,7 +73,7 @@ deepspider config reset
 
 **方式 A：独立 Agent（基于 opencode）**
 
-内置 opencode TUI，自带 spider Agent + 八阶段工作流，开箱即用。
+内置 OpenCode V2 Runtime 和官方 TUI，自带 spider Agent + 八阶段工作流。Runtime 会先确认 OpenCode 健康、Spider Agent、DeepSpider Skill、Plugin 工具和 MCP 均已就绪，再连接 TUI。
 
 ```bash
 # 启动 Agent（默认模型）
@@ -92,8 +92,8 @@ deepspider agent --verbose
 作为 MCP Server 挂载到 Claude Code，由 Claude Code 承担决策层。
 
 ```bash
-# 在 Claude Code 中注册
-claude mcp add deepspider node src/mcp/server.js
+# 在 Claude Code 中注册全局安装的 MCP bin
+claude mcp add deepspider deepspider-mcp
 
 # 然后在 Claude Code 中使用 slash commands:
 # /ds:trace https://target-site.com
@@ -110,12 +110,7 @@ deepspider fetch https://api.example.com
 
 ## 使用流程
 
-1. **启动**: `deepspider https://target-site.com`
-2. **等待**: 浏览器打开，自动记录数据
-3. **操作**: 登录、翻页、触发目标请求
-4. **选择**: 点击面板 ⦿ 选择目标数据
-5. **分析**: 选择操作（追踪来源/分析加密/生成爬虫）
-6. **对话**: 继续提问，深入分析
+运行 `deepspider agent` 进入 OpenCode TUI 后，由 Spider Agent 按 intake、evidence、locate、recover、runtime、extraction、validation、handoff 八阶段推进任务。需要仅启动 MCP 服务时，使用 `deepspider mcp`。
 
 ## 架构
 

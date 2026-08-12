@@ -25,6 +25,8 @@ jobs:
 
       - run: pnpm install --no-frozen-lockfile --ignore-scripts
       - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm smoke:pack
 
   publish:
     needs: test

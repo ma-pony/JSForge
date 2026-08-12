@@ -6,6 +6,7 @@
  */
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -193,8 +194,9 @@ export class OpencodeRuntime {
   }
 
   async _createServer() {
-    const binDirectory = path.join(this.projectRoot, 'node_modules/.bin')
-    return withPinnedOpencodePath(binDirectory, () =>
+    const packageRoot = path.dirname(require.resolve('opencode-ai/package.json'))
+    const executablePath = path.join(packageRoot, 'bin', 'opencode.exe')
+    return withPinnedOpencodePath(executablePath, () =>
       this.createOpencodeFn({
         hostname: '127.0.0.1',
         port: 0,
@@ -225,11 +227,11 @@ export class OpencodeRuntime {
 
   async _checkAgent() {
     try {
-      const response = await this.client.v2.agent.list(
-        { location: { directory: this.directory } },
+      const response = await this.client.app.agents(
+        { directory: this.directory },
         { throwOnError: true }
       )
-      if (!response?.data?.data?.some((agent) => agent.id === 'spider')) {
+      if (!response?.data?.some((agent) => agent.name === 'spider')) {
         throw new Error('OpenCode agent spider is unavailable')
       }
     } catch (error) {
@@ -239,11 +241,11 @@ export class OpencodeRuntime {
 
   async _checkSkill() {
     try {
-      const response = await this.client.v2.skill.list(
-        { location: { directory: this.directory } },
+      const response = await this.client.app.skills(
+        { directory: this.directory },
         { throwOnError: true }
       )
-      if (!response?.data?.data?.some((skill) => skill.name === 'deepspider')) {
+      if (!response?.data?.some((skill) => skill.name === 'deepspider')) {
         throw new Error('DeepSpider skill is unavailable')
       }
     } catch (error) {
@@ -336,7 +338,7 @@ function runtimeError(code, message, cause) {
   return error
 }
 
-async function withPinnedOpencodePath(binDirectory, createOpencodeFn) {
+async function withPinnedOpencodePath(executablePath, createOpencodeFn) {
   const previous = pathCriticalSection
   let release
   pathCriticalSection = new Promise((resolve) => {
@@ -344,6 +346,13 @@ async function withPinnedOpencodePath(binDirectory, createOpencodeFn) {
   })
   await previous
 
+  let temporaryBinDirectory
+  let binDirectory = path.dirname(executablePath)
+  if (process.platform !== 'win32') {
+    temporaryBinDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-opencode-bin-'))
+    fs.symlinkSync(executablePath, path.join(temporaryBinDirectory, 'opencode'))
+    binDirectory = temporaryBinDirectory
+  }
   const originalPath = process.env.PATH
   process.env.PATH = originalPath
     ? `${binDirectory}${path.delimiter}${originalPath}`
@@ -354,6 +363,9 @@ async function withPinnedOpencodePath(binDirectory, createOpencodeFn) {
   } finally {
     if (originalPath === undefined) delete process.env.PATH
     else process.env.PATH = originalPath
+    if (temporaryBinDirectory) {
+      fs.rmSync(temporaryBinDirectory, { recursive: true, force: true })
+    }
     release()
   }
 }

@@ -1,8 +1,15 @@
 import { EventEmitter } from 'node:events'
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import fs from 'node:fs'
+import path from 'node:path'
+import { createRequire } from 'node:module'
 import { OpencodeRuntime } from '../src/agent/runtime.js'
 import { startTUI } from '../src/agent/tui.js'
+
+const require = createRequire(import.meta.url)
+const opencodePackageRoot = path.dirname(require.resolve('opencode-ai/package.json'))
+const opencodeExecutable = path.join(opencodePackageRoot, 'bin', 'opencode.exe')
 
 const supportedVersions = {
   '@opencode-ai/sdk': '1.18.16',
@@ -12,6 +19,10 @@ const supportedVersions = {
 
 function readyClient(overrides = {}) {
   return {
+    app: {
+      agents: async () => ({ data: [{ name: 'spider' }] }),
+      skills: async () => ({ data: [{ name: 'deepspider' }] }),
+    },
     v2: {
       health: { get: async () => ({ data: { healthy: true } }) },
       agent: { list: async () => ({ data: { data: [{ id: 'spider' }] } }) },
@@ -63,6 +74,25 @@ function deferred() {
 
 test('start reaches ready only after all readiness checks pass', async () => {
   const { runtime } = makeRuntimeWithReadyFakes()
+
+  await runtime.start()
+
+  assert.equal(runtime.state, 'ready')
+})
+
+test('compatibility APIs expose injected capabilities when V2 lists only built-ins', async () => {
+  const client = readyClient({
+    app: {
+      agents: async () => ({ data: [{ name: 'spider' }] }),
+      skills: async () => ({ data: [{ name: 'deepspider' }] }),
+    },
+    v2: {
+      health: { get: async () => ({ data: { healthy: true } }) },
+      agent: { list: async () => ({ data: { data: [{ id: 'build' }] } }) },
+      skill: { list: async () => ({ data: { data: [{ name: 'customize-opencode' }] } }) },
+    },
+  })
+  const { runtime } = makeRuntimeWithReadyFakes(client)
 
   await runtime.start()
 
@@ -214,10 +244,13 @@ test('concurrent runtime starts serialize temporary PATH changes and restore the
     await secondEntered.promise
     await secondStart
 
-    assert.deepEqual(seenPaths, [
-      `/tmp/deepspider-runtime-first/node_modules/.bin:${originalPath}`,
-      `/tmp/deepspider-runtime-second/node_modules/.bin:${originalPath}`,
-    ])
+    const seenBinDirectories = seenPaths.map((seenPath) => seenPath.split(path.delimiter)[0])
+    for (const seenPath of seenPaths) {
+      assert.equal(seenPath.split(path.delimiter).slice(1).join(path.delimiter), originalPath)
+    }
+    assert.notEqual(seenBinDirectories[0], seenBinDirectories[1])
+    assert.ok(seenBinDirectories.every((dir) => /deepspider-opencode-bin-/.test(dir)))
+    assert.ok(seenBinDirectories.every((dir) => !fs.existsSync(dir)))
     assert.equal(process.env.PATH, originalPath)
   } finally {
     firstRelease.resolve()
@@ -226,6 +259,28 @@ test('concurrent runtime starts serialize temporary PATH changes and restore the
     else process.env.PATH = originalPath
     await Promise.allSettled([first.close(), second.close()])
   }
+})
+
+test('start resolves opencode directly to the packaged executable', async () => {
+  const originalPath = process.env.PATH
+  const { runtime } = makeRuntimeWithReadyFakes(readyClient(), {
+    createOpencodeFn: async () => {
+      const command = path.join(process.env.PATH.split(path.delimiter)[0], 'opencode')
+      assert.equal(fs.realpathSync(command), opencodeExecutable)
+      return {
+        client: readyClient(),
+        server: { url: 'http://127.0.0.1:45680', close() {} },
+      }
+    },
+  })
+
+  try {
+    await runtime.start()
+  } finally {
+    await runtime.close()
+  }
+
+  assert.equal(process.env.PATH, originalPath)
 })
 
 test('start rejects unsupported installed OpenCode versions before spawning', async () => {
@@ -248,23 +303,21 @@ test('start sends the user session directory to every readiness API', async () =
   const directory = '/tmp/deepspider-user-project'
   const calls = []
   const client = {
+    app: {
+      agents: async (...args) => {
+        calls.push(['agent', ...args])
+        return { data: [{ name: 'spider' }] }
+      },
+      skills: async (...args) => {
+        calls.push(['skill', ...args])
+        return { data: [{ name: 'deepspider' }] }
+      },
+    },
     v2: {
       health: {
         get: async (...args) => {
           calls.push(['health', ...args])
           return { data: { healthy: true } }
-        },
-      },
-      agent: {
-        list: async (...args) => {
-          calls.push(['agent', ...args])
-          return { data: { data: [{ id: 'spider' }] } }
-        },
-      },
-      skill: {
-        list: async (...args) => {
-          calls.push(['skill', ...args])
-          return { data: { data: [{ name: 'deepspider' }] } }
         },
       },
     },
@@ -287,8 +340,8 @@ test('start sends the user session directory to every readiness API', async () =
 
   assert.deepEqual(calls, [
     ['health', { throwOnError: true }],
-    ['agent', { location: { directory } }, { throwOnError: true }],
-    ['skill', { location: { directory } }, { throwOnError: true }],
+    ['agent', { directory }, { throwOnError: true }],
+    ['skill', { directory }, { throwOnError: true }],
     ['mcp', { directory }, { throwOnError: true }],
     ['tool', { directory }, { throwOnError: true }],
   ])
@@ -298,8 +351,6 @@ test('unhealthy server is reported with the health readiness error', async () =>
   const client = readyClient({
     v2: {
       health: { get: async () => ({ data: { healthy: false } }) },
-      agent: { list: async () => ({ data: { data: [{ id: 'spider' }] } }) },
-      skill: { list: async () => ({ data: { data: [{ name: 'deepspider' }] } }) },
     },
   })
   const { runtime } = makeRuntimeWithReadyFakes(client)
@@ -309,10 +360,9 @@ test('unhealthy server is reported with the health readiness error', async () =>
 
 test('missing spider agent is reported with the agent readiness error', async () => {
   const client = readyClient({
-    v2: {
-      health: { get: async () => ({ data: { healthy: true } }) },
-      agent: { list: async () => ({ data: { data: [] } }) },
-      skill: { list: async () => ({ data: { data: [{ name: 'deepspider' }] } }) },
+    app: {
+      agents: async () => ({ data: [] }),
+      skills: async () => ({ data: [{ name: 'deepspider' }] }),
     },
   })
   const { runtime } = makeRuntimeWithReadyFakes(client)
@@ -322,10 +372,9 @@ test('missing spider agent is reported with the agent readiness error', async ()
 
 test('missing DeepSpider skill is reported with the skill readiness error', async () => {
   const client = readyClient({
-    v2: {
-      health: { get: async () => ({ data: { healthy: true } }) },
-      agent: { list: async () => ({ data: { data: [{ id: 'spider' }] } }) },
-      skill: { list: async () => ({ data: { data: [] } }) },
+    app: {
+      agents: async () => ({ data: [{ name: 'spider' }] }),
+      skills: async () => ({ data: [] }),
     },
   })
   const { runtime } = makeRuntimeWithReadyFakes(client)
