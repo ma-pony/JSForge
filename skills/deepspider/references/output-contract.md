@@ -83,6 +83,21 @@
 
 ## 验证要求（Verification Requirements）
 
+### 运行时独立性
+
+逆向任务的 validation 和 handoff 必须使用非浏览器客户端。运行命令不得启动、连接或要求用户预先启动 Patchright、Playwright、Selenium、CDP 或其它浏览器进程。
+
+浏览器只提供真实样本和对照结果。页面上下文 `fetch` 成功、DOM 提取成功或浏览器自动化脚本运行成功，都不能写为 `verified: true` 或 `handoff-complete`。
+
+如果非浏览器请求仍失败，输出必须包含：
+
+- 已完成的请求链和本地实现；
+- 浏览器与本地的首次已知分歧；
+- 尚未证明或无法复现的输入、状态或传输条件；
+- 下一步最小验证动作。
+
+此时状态保持在当前阶段，不得生成成功的 handoff 结论。
+
 ### 最少样本数量
 
 所有验证输出**必须包含至少 3 组样本**，且输入各不相同：
@@ -141,7 +156,7 @@ runtime-complete       ← Node.js entry.js 与浏览器输出一致
     ↓
 extraction-complete    ← pure-crypto.js 通过所有 fixture 验证
     ↓
-handoff-complete       ← Python 爬虫项目生成并验证
+handoff-complete       ← 非浏览器 Python 请求项目生成并实测成功
 ```
 
 每次阶段跳转时，必须在 `request-chain.md` 中记录：
@@ -172,14 +187,14 @@ handoff-complete       ← Python 爬虫项目生成并验证
 
 ## Python 爬虫项目结构
 
-`/ds:crawl` 产出的项目必须包含以下文件：
+`/ds:crawl` 产出的项目必须包含以下文件。只有目标存在动态生成逻辑时才需要 `crypto.py` 和 `fixtures.json`：
 
 ```
 {task_name}_crawler/
 ├── main.py           # 主爬虫逻辑
-├── crypto.py         # 加密函数（来自 extraction 阶段）
+├── crypto.py         # 可选：动态生成函数（来自 extraction 阶段）
 ├── config.py         # 目标 URL、请求头、加密参数配置
-├── fixtures.json     # 验证样本（来自 extraction 阶段）
+├── fixtures.json     # 可选：动态生成逻辑的验证样本
 ├── requirements.txt  # Python 依赖
 └── README.md         # 运行说明（仅当用户要求时创建）
 ```

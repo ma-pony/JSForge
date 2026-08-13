@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import { buildOpencodeConfig } from '../src/agent/config.js'
 
-test('builds DeepSpider-owned V2 config', () => {
+test('builds DeepSpider-owned V2 config with all permissions auto-approved', () => {
   const root = '/tmp/deepspider-fixture'
   const config = buildOpencodeConfig({ projectRoot: root })
   assert.equal(config.default_agent, 'spider')
@@ -16,7 +16,7 @@ test('builds DeepSpider-owned V2 config', () => {
     path.join(root, 'src/mcp/server.js'),
   ])
   assert.equal(config.mcp.deepspider.cwd, root)
-  assert.equal(config.permission['deepspider_*'], 'allow')
+  assert.equal(config.permission, 'allow')
   assert.equal(config.model, undefined)
 })
 

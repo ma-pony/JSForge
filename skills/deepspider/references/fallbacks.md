@@ -44,20 +44,31 @@ set_breakpoint 后未暂停 →
 ```
 diff_env_requirements 反复出现新错误 →
   1. 检查是否在修复同一类错误（可能是结构性问题）
-  2. 超过 10 轮迭代 → 考虑换方案（直接请求 or 浏览器自动化）
-  3. 遇到 Proxy/Reflect 相关错误 → 可能是反调试代码，需要 bypass
+  2. 回到真实请求与本地请求的首次分歧，删除无证据的补丁
+  3. 无法继续时记录准确阻塞点，保持任务未完成
+  4. 遇到 Proxy/Reflect 相关错误 → 可能是反调试代码，需要 bypass
 ```
 
 ## 方案选择决策树
 
 ```
-目标网站
-  ├─ 无加密参数 → 直接用 requests 爬取
-  ├─ 简单加密（MD5/SHA/HMAC）→ /ds:trace → /ds:reverse → /ds:crawl
-  ├─ 中等加密（AES/RSA + 动态 key）→ /ds:trace → /ds:reverse（含断点调试）→ /ds:crawl
-  ├─ VM 混淆 → /ds:trace → /ds:rebuild → /ds:crawl（调用本地 node）
-  └─ 极端反爬（瑞数/Cloudflare）→ 浏览器自动化 + 代理池
+真实浏览器请求（证据基线）
+  ├─ 非浏览器客户端直接复现成功
+  │    └─ 多样本验证 → handoff
+  └─ 非浏览器客户端失败
+       ├─ 请求参数 / Cookie / Header / 客户端状态不同
+       │    └─ locate → recover → 必要时 runtime / extraction
+       └─ 请求内容一致但响应不同
+            └─ 定位 TLS、HTTP、Header 顺序、连接与会话等传输差异
+                 ├─ 非浏览器请求成功 → validation → handoff
+                 └─ 仍失败 → 记录已证明的阻塞点，状态保持未完成
 ```
+
+## 降级边界
+
+“降级”只能更换定位、Hook、补环境或非浏览器 HTTP 实现方式，不能把运行时浏览器依赖当成逆向结果。浏览器内 `fetch`、DOM 提取和浏览器自动化可用于验证假设，但不能满足 validation 或 handoff。
+
+如果用户明确把任务范围改为浏览器自动化，可以单独交付浏览器方案；必须标注这是新的任务范围，不得把它记录为逆向完成。
 
 ## 常见错误与解决
 

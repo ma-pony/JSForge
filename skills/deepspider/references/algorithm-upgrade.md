@@ -202,20 +202,13 @@ find_in_script("67452301")
 
 ---
 
-## 紧急降级方案
+## 无法完成重定位时
 
-若短时间内无法完成重定位，可临时切换到浏览器自动化模式：
+短时间内无法完成重定位，不改变逆向任务的完成标准：
 
-```python
-# 临时方案：用 Patchright 直接操作浏览器获取数据
-# 缺点：速度慢，但可以在重定位期间保持数据采集
+1. 保存新版真实请求、旧版实现和首次分歧证据；
+2. 明确当前缺失的是写入边界、动态输入、环境依赖还是传输条件；
+3. 将状态保持在 locate / recover / runtime，不得进入 handoff；
+4. 浏览器可以继续采集新版样本，但浏览器取数不能作为算法升级后的替代实现。
 
-from patchright.sync_api import sync_playwright
-
-with sync_playwright() as p:
-    browser = p.chromium.launch(headless=False)  # headed 模式避免检测
-    page = browser.new_page()
-    page.goto(target_url)
-    # 操作页面获取数据
-    # 同时抓包记录新的请求特征，用于后续逆向
-```
+只有用户明确将任务改为浏览器自动化，才建立独立的浏览器任务；该任务不更新原逆向产物为验证通过。

@@ -48,14 +48,7 @@ export function buildOpencodeConfig({ model, projectRoot = PROJECT_ROOT } = {}) 
       paths: [path.join(projectRoot, 'skills/deepspider')],
     },
 
-    permission: {
-      read: 'allow',
-      glob: 'allow',
-      grep: 'allow',
-      bash: 'ask',
-      edit: 'ask',
-      'deepspider_*': 'allow',
-    },
+    permission: 'allow',
 
     agent: loadAgentDefinitions(path.join(projectRoot, 'agents')),
   }

@@ -15,6 +15,7 @@ import { registerCaptureTools } from './tools/capture.js';
 import { registerRebuildTools } from './tools/rebuild.js';
 import { registerStealthTools } from './tools/stealth.js';
 import { cleanup } from './context.js';
+import { installMcpShutdown } from './lifecycle.js';
 
 const server = new McpServer(
   { name: 'deepspider', version: '1.0.0' }
@@ -30,16 +31,11 @@ registerCaptureTools(server);
 registerRebuildTools(server);
 registerStealthTools(server);
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.error('[MCP] Shutting down...');
-  await cleanup();
-  process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-  await cleanup();
-  process.exit(0);
+installMcpShutdown({
+  cleanupFn: async () => {
+    await cleanup();
+    await server.close();
+  },
 });
 
 // Start server
@@ -49,7 +45,8 @@ async function main() {
   console.error('DeepSpider MCP server running (51 tools registered)');
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error('MCP server failed to start:', err);
+  await cleanup();
   process.exit(1);
 });

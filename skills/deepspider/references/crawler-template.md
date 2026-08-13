@@ -1,6 +1,6 @@
 # Handoff 阶段：Python 爬虫项目生成模板
 
-> **阶段目标**：基于 extraction 阶段产出的 `crypto.py` 和 `fixtures.json`，生成完整可运行的 Python 爬虫项目，并验证其产出与浏览器一致。
+> **阶段目标**：生成脱离浏览器运行的 Python 请求项目，并验证其业务结果与真实浏览器请求一致。
 
 ---
 
@@ -8,9 +8,12 @@
 
 **必须满足，否则不得进入本阶段：**
 
-- [ ] `crypto.py` 已存在，且全部 fixture 验证通过
-- [ ] `fixtures.json` 包含 ≥3 组已验证样本
-- [ ] `save_session_state` 已执行，获取了有效的 cookies/tokens
+- [ ] 非浏览器客户端已成功获得预期业务响应
+- [ ] 请求结果已与真实浏览器请求完成多样本对照
+- [ ] 存在动态生成逻辑时，`crypto.py` 已通过 ≥3 组 fixture 验证
+- [ ] 所需凭据、会话状态及其来源和刷新方式已明确
+
+浏览器内 `fetch`、DOM 提取或由 Python 启动浏览器都不满足进入条件。浏览器只能用于采集样本和结果对照。
 
 ---
 
@@ -19,9 +22,9 @@
 ```
 {task_name}_crawler/
 ├── main.py           # 主爬虫逻辑：请求 + 加密 + 重试
-├── crypto.py         # 纯加密函数（来自 extraction 阶段，直接复制）
+├── crypto.py         # 可选：动态生成函数（来自 extraction 阶段）
 ├── config.py         # 配置：URL、请求头、加密参数
-├── fixtures.json     # 验证样本（来自 extraction 阶段，直接复制）
+├── fixtures.json     # 可选：动态生成逻辑的验证样本
 └── requirements.txt  # Python 依赖列表
 ```
 
@@ -382,6 +385,7 @@ python main.py
 - Python 爬虫返回的数据与浏览器中同一查询结果的关键字段完全一致
 - 无报错，HTTP 状态码为 200
 - 加密参数被服务端正确验证（未返回签名错误）
+- 运行期间没有启动、连接或要求预先启动任何浏览器进程
 
 ---
 
@@ -389,9 +393,10 @@ python main.py
 
 满足以下所有条件，handoff 阶段完成：
 
-- [ ] 项目目录结构完整（main.py、crypto.py、config.py、requirements.txt）
+- [ ] 项目目录结构完整（main.py、config.py、requirements.txt；动态生成逻辑存在时包含 crypto.py、fixtures.json）
 - [ ] `python main.py` 运行无报错
 - [ ] HTTP 响应状态码 200，服务端未返回签名/认证错误
 - [ ] Python 输出数据与浏览器同查询结果关键字段一致
+- [ ] 运行时不依赖浏览器、CDP 或浏览器自动化框架
 - [ ] `request-chain.md` 更新为 `handoff-complete` 状态
 - [ ] `/ds:crawl` 输出包含 `test_result.success: true` 和 `records_count > 0`

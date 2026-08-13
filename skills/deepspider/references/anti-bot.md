@@ -181,10 +181,12 @@ def request_with_retry(session, url, **kwargs):
 
 ## 应对策略优先级
 
-1. **直接请求**（最优）：分析加密参数，用 Python 直接发请求
-2. **浏览器自动化**（次选）：Patchright 操作浏览器，适合强指纹检测场景
-3. **代理池**（辅助）：IP 轮换避免封禁
-4. **降级策略**：从 headless 降级到 headed，从自动化降级到半自动
+1. **建立浏览器证据基线**：记录成功请求、响应、动态状态和传输特征。
+2. **还原客户端生成链**：提取请求参数、Cookie、Header 和环境依赖的生成逻辑。
+3. **复现传输条件**：用非浏览器客户端处理 TLS、HTTP、Header 顺序、连接和会话差异。
+4. **非浏览器验证**：只有独立请求获得预期业务响应才算完成。
+
+Patchright 用于观察、Hook、断点和对照验证。浏览器自动化不是逆向任务的降级交付；只有用户明确改变任务范围时才可作为单独方案。
 
 ---
 
@@ -194,7 +196,7 @@ def request_with_retry(session, url, **kwargs):
 |------|------|---------|---------|
 | 瑞数 (RS) | `$_ts` cookie、大量混淆 JS | `_signature`、`_token` | 补环境 + `/ds:rebuild` |
 | 极验 | `gt`/`challenge` 参数、滑块 | `validate` | 验证码专项处理 |
-| 5 秒盾 (Cloudflare) | `cf_clearance` cookie | TLS 指纹 | Patchright 自动化通过 |
+| 5 秒盾 (Cloudflare) | `cf_clearance` cookie | TLS 指纹 | 捕获挑战状态，复现 Cookie 与传输条件 |
 | 网易易盾 | NECaptcha、`ne_verify` | — | 验证码处理 |
 | 同盾 | `blackbox` 参数（超长） | `blackbox` | 补环境，分析 TD SDK |
 | 数美 | `smid`、`smc` 参数 | — | 补环境，分析 SM SDK |
