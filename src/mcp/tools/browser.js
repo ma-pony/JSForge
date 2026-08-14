@@ -6,6 +6,43 @@ import { z } from 'zod';
 import { join } from 'path';
 import { PATHS, ensureDir, generateFilename } from '../../config/paths.js';
 
+async function ensureConsoleTracking(captures, cdp) {
+  if (captures.consoleTracking) return;
+  if (captures.consoleInitializationPromise && captures.consoleInitializationSession === cdp) {
+    await captures.consoleInitializationPromise;
+    return;
+  }
+
+  const initialization = (async () => {
+    await cdp.send('Runtime.enable');
+    if (captures.consoleSession !== cdp || captures.consoleInitializationPromise !== initialization) return;
+
+    cdp.on('Runtime.consoleAPICalled', (params) => {
+      if (captures.consoleSession !== cdp) return;
+      captures.consoleMessages.push({
+        type: params.type,
+        text: params.args?.map(a => a.value ?? a.description ?? '').join(' '),
+        timestamp: params.timestamp,
+        url: params.stackTrace?.callFrames?.[0]?.url,
+        line: params.stackTrace?.callFrames?.[0]?.lineNumber,
+      });
+      if (captures.consoleMessages.length > 500) captures.consoleMessages.shift();
+    });
+    captures.consoleTracking = true;
+  })();
+
+  captures.consoleInitializationSession = cdp;
+  captures.consoleInitializationPromise = initialization;
+  try {
+    await initialization;
+  } finally {
+    if (captures.consoleInitializationPromise === initialization) {
+      captures.consoleInitializationPromise = null;
+      captures.consoleInitializationSession = null;
+    }
+  }
+}
+
 export function registerBrowserTools(server, dependencies) {
   const {
     getRuntime,
@@ -373,24 +410,10 @@ export function registerBrowserTools(server, dependencies) {
           captures.consoleMessages = [];
           captures.consoleTracking = false;
           captures.consoleSession = cdp;
+          captures.consoleInitializationPromise = null;
+          captures.consoleInitializationSession = null;
         }
-        // Enable console tracking once for this Runtime and raw CDP session.
-        if (!captures.consoleTracking) {
-          cdp.on('Runtime.consoleAPICalled', (params) => {
-            if (captures.consoleSession !== cdp) return;
-            captures.consoleMessages.push({
-              type: params.type,
-              text: params.args?.map(a => a.value ?? a.description ?? '').join(' '),
-              timestamp: params.timestamp,
-              url: params.stackTrace?.callFrames?.[0]?.url,
-              line: params.stackTrace?.callFrames?.[0]?.lineNumber,
-            });
-            // Cap at 500 messages
-            if (captures.consoleMessages.length > 500) captures.consoleMessages.shift();
-          });
-          await cdp.send('Runtime.enable');
-          captures.consoleTracking = true;
-        }
+        await ensureConsoleTracking(captures, cdp);
 
         let messages = captures.consoleMessages;
         if (level !== 'all') {

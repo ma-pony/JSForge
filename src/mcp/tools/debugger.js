@@ -18,35 +18,54 @@ async function getSession(dependencies) {
   if (state.debuggerSession && state.rawClient === rawClient) {
     return state.debuggerSession;
   }
+  if (state.debuggerInitializationPromise && state.debuggerInitializationSession === rawClient) {
+    return state.debuggerInitializationPromise;
+  }
 
   // 清理过期状态（pause 事件是旧会话的，新会话 Debugger.paused 会重新触发）
+  state.debuggerSession = null;
+  state.rawClient = null;
   state.isPaused = false;
   state.currentCallFrames = [];
   state.activeBreakpoints = [];
 
-  const session = new CDPSession(rawClient);
-  await session.enable();
-  state.debuggerSession = session;
-  state.rawClient = rawClient;
-
-  session.on('Debugger.paused', (params) => {
-    if (state.debuggerSession !== session) return;
-    const isBreakpoint = params.reason === 'breakpoint' || params.hitBreakpoints?.length > 0;
-    if (isBreakpoint) {
-      state.isPaused = true;
-      state.currentCallFrames = params.callFrames || [];
-      const top = state.currentCallFrames[0];
-      console.error(`[debug] Breakpoint hit: ${top?.functionName || '(anonymous)'} @ ${top?.url?.split('/').pop() || '?'}:${top?.location?.lineNumber ?? '?'}`);
+  const initialization = (async () => {
+    const session = new CDPSession(rawClient);
+    await session.enable();
+    if (state.debuggerInitializationPromise !== initialization || runtime.cdpSession !== rawClient) {
+      throw new Error('CDP session changed during debugger initialization');
     }
-  });
 
-  session.on('Debugger.resumed', () => {
-    if (state.debuggerSession !== session) return;
-    state.isPaused = false;
-    state.currentCallFrames = [];
-  });
+    state.debuggerSession = session;
+    state.rawClient = rawClient;
+    session.on('Debugger.paused', (params) => {
+      if (state.debuggerSession !== session) return;
+      const isBreakpoint = params.reason === 'breakpoint' || params.hitBreakpoints?.length > 0;
+      if (isBreakpoint) {
+        state.isPaused = true;
+        state.currentCallFrames = params.callFrames || [];
+        const top = state.currentCallFrames[0];
+        console.error(`[debug] Breakpoint hit: ${top?.functionName || '(anonymous)'} @ ${top?.url?.split('/').pop() || '?'}:${top?.location?.lineNumber ?? '?'}`);
+      }
+    });
+    session.on('Debugger.resumed', () => {
+      if (state.debuggerSession !== session) return;
+      state.isPaused = false;
+      state.currentCallFrames = [];
+    });
+    return session;
+  })();
 
-  return session;
+  state.debuggerInitializationSession = rawClient;
+  state.debuggerInitializationPromise = initialization;
+  try {
+    return await initialization;
+  } finally {
+    if (state.debuggerInitializationPromise === initialization) {
+      state.debuggerInitializationPromise = null;
+      state.debuggerInitializationSession = null;
+    }
+  }
 }
 
 function checkPaused(state) {

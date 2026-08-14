@@ -4,6 +4,44 @@
 
 import { z } from 'zod';
 
+async function ensureWebSocketTracking(captures, cdp) {
+  if (captures.webSocketTracking) return;
+  if (captures.webSocketInitializationPromise && captures.webSocketInitializationSession === cdp) {
+    await captures.webSocketInitializationPromise;
+    return;
+  }
+
+  const initialization = (async () => {
+    await cdp.send('Network.enable');
+    if (captures.webSocketSession !== cdp || captures.webSocketInitializationPromise !== initialization) return;
+
+    cdp.on('Network.webSocketCreated', (params) => {
+      if (captures.webSocketSession !== cdp) return;
+      captures.webSocketConnections.push({ requestId: params.requestId, url: params.url, timestamp: Date.now() });
+    });
+    cdp.on('Network.webSocketFrameReceived', (params) => {
+      if (captures.webSocketSession !== cdp) return;
+      captures.webSocketMessages.push({ requestId: params.requestId, direction: 'received', data: params.response?.payloadData, timestamp: Date.now() });
+    });
+    cdp.on('Network.webSocketFrameSent', (params) => {
+      if (captures.webSocketSession !== cdp) return;
+      captures.webSocketMessages.push({ requestId: params.requestId, direction: 'sent', data: params.response?.payloadData, timestamp: Date.now() });
+    });
+    captures.webSocketTracking = true;
+  })();
+
+  captures.webSocketInitializationSession = cdp;
+  captures.webSocketInitializationPromise = initialization;
+  try {
+    await initialization;
+  } finally {
+    if (captures.webSocketInitializationPromise === initialization) {
+      captures.webSocketInitializationPromise = null;
+      captures.webSocketInitializationSession = null;
+    }
+  }
+}
+
 export function registerNetworkTools(server, dependencies) {
   const { getRuntime, getDataStore, getCDPSession } = dependencies;
   server.tool(
@@ -71,24 +109,10 @@ export function registerNetworkTools(server, dependencies) {
           captures.webSocketMessages = [];
           captures.webSocketTracking = false;
           captures.webSocketSession = cdp;
+          captures.webSocketInitializationPromise = null;
+          captures.webSocketInitializationSession = null;
         }
-        // Enable WebSocket tracking once for this Runtime and raw CDP session.
-        if (!captures.webSocketTracking) {
-          cdp.on('Network.webSocketCreated', (params) => {
-            if (captures.webSocketSession !== cdp) return;
-            captures.webSocketConnections.push({ requestId: params.requestId, url: params.url, timestamp: Date.now() });
-          });
-          cdp.on('Network.webSocketFrameReceived', (params) => {
-            if (captures.webSocketSession !== cdp) return;
-            captures.webSocketMessages.push({ requestId: params.requestId, direction: 'received', data: params.response?.payloadData, timestamp: Date.now() });
-          });
-          cdp.on('Network.webSocketFrameSent', (params) => {
-            if (captures.webSocketSession !== cdp) return;
-            captures.webSocketMessages.push({ requestId: params.requestId, direction: 'sent', data: params.response?.payloadData, timestamp: Date.now() });
-          });
-          await cdp.send('Network.enable');
-          captures.webSocketTracking = true;
-        }
+        await ensureWebSocketTracking(captures, cdp);
         return { content: [{ type: 'text', text: JSON.stringify({ connections: captures.webSocketConnections, messageCount: captures.webSocketMessages.length }, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };

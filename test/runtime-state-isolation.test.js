@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
+import { setImmediate } from 'node:timers/promises'
 
 import * as mcpContextModule from '../src/mcp/context.js'
 import { registerBrowserTools } from '../src/mcp/tools/browser.js'
@@ -23,6 +24,16 @@ function parseResult(result) {
   return JSON.parse(result.content[0].text)
 }
 
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function createBrowser(rawCdp) {
   const pages = [0, 1].map((index) => ({
     bringToFront: async () => {},
@@ -39,13 +50,14 @@ function createBrowser(rawCdp) {
   }
 }
 
-function createContextHarness() {
+function createContextHarness({ send } = {}) {
   const rawSessions = new Map()
   const browsers = new Map()
   const manager = new RuntimeManager({
     runtimeFactory: ({ id }) => {
       const rawCdp = new EventEmitter()
       rawCdp.send = async (method) => {
+        await send?.({ id, method })
         if (method === 'Debugger.setBreakpointByUrl') {
           return { breakpointId: `${id}-breakpoint` }
         }
@@ -206,6 +218,159 @@ test('console and WebSocket listeners are idempotent and capture events only for
   const secondCdp = rawSessions.get('listener-second')
   assert.equal(secondCdp.listenerCount('Runtime.consoleAPICalled'), 1)
   assert.equal(secondCdp.listenerCount('Network.webSocketCreated'), 1)
+
+  await manager.closeAll()
+})
+
+test('concurrent console setup shares one Runtime-local initializer and captures one event', async () => {
+  const enableGate = deferred()
+  let enableCalls = 0
+  const { manager, rawSessions } = createContextHarness({
+    send: async ({ method }) => {
+      if (method !== 'Runtime.enable') return
+      enableCalls += 1
+      await enableGate.promise
+    },
+  })
+  const context = mcpContextModule.createMcpContext({ sessionId: 'console-concurrent', runtimeManager: manager })
+  const server = fakeServer()
+  registerBrowserTools(server, context)
+  const handler = server.tools.get('list_console_messages').handler
+
+  const first = handler({ level: 'all', limit: 50 })
+  const second = handler({ level: 'all', limit: 50 })
+  await setImmediate()
+  const callsWhilePending = enableCalls
+  enableGate.resolve()
+  await Promise.all([first, second])
+
+  const cdp = rawSessions.get('console-concurrent')
+  cdp.emit('Runtime.consoleAPICalled', {
+    type: 'log',
+    args: [{ value: 'once' }],
+    timestamp: 1,
+  })
+  const captured = parseResult(await handler({ level: 'all', limit: 50 }))
+
+  assert.equal(callsWhilePending, 1)
+  assert.equal(cdp.listenerCount('Runtime.consoleAPICalled'), 1)
+  assert.deepEqual(captured.messages.map(({ text }) => text), ['once'])
+
+  await manager.closeAll()
+})
+
+test('console setup retries cleanly after one enable failure without retaining a listener', async () => {
+  let enableCalls = 0
+  const { manager, rawSessions } = createContextHarness({
+    send: async ({ method }) => {
+      if (method !== 'Runtime.enable') return
+      enableCalls += 1
+      if (enableCalls === 1) throw new Error('synthetic Runtime.enable failure')
+    },
+  })
+  const context = mcpContextModule.createMcpContext({ sessionId: 'console-retry', runtimeManager: manager })
+  const server = fakeServer()
+  registerBrowserTools(server, context)
+  const handler = server.tools.get('list_console_messages').handler
+
+  const failed = await handler({ level: 'all', limit: 50 })
+  const cdp = rawSessions.get('console-retry')
+  const listenersAfterFailure = cdp.listenerCount('Runtime.consoleAPICalled')
+  const retried = await handler({ level: 'all', limit: 50 })
+  cdp.emit('Runtime.consoleAPICalled', {
+    type: 'log',
+    args: [{ value: 'retry once' }],
+    timestamp: 1,
+  })
+  const captured = parseResult(await handler({ level: 'all', limit: 50 }))
+
+  assert.equal(failed.isError, true)
+  assert.equal(retried.isError, undefined)
+  assert.equal(enableCalls, 2)
+  assert.equal(listenersAfterFailure, 0)
+  assert.equal(cdp.listenerCount('Runtime.consoleAPICalled'), 1)
+  assert.deepEqual(captured.messages.map(({ text }) => text), ['retry once'])
+
+  await manager.closeAll()
+})
+
+test('concurrent WebSocket setup shares one Runtime-local initializer and captures one event', async () => {
+  const enableGate = deferred()
+  let enableCalls = 0
+  const { manager, rawSessions } = createContextHarness({
+    send: async ({ method }) => {
+      if (method !== 'Network.enable') return
+      enableCalls += 1
+      await enableGate.promise
+    },
+  })
+  const context = mcpContextModule.createMcpContext({ sessionId: 'websocket-concurrent', runtimeManager: manager })
+  const server = fakeServer()
+  registerNetworkTools(server, context)
+  const handler = server.tools.get('list_websockets').handler
+
+  const first = handler({})
+  const second = handler({})
+  await setImmediate()
+  const callsWhilePending = enableCalls
+  enableGate.resolve()
+  await Promise.all([first, second])
+
+  const cdp = rawSessions.get('websocket-concurrent')
+  cdp.emit('Network.webSocketCreated', {
+    requestId: 'ws-once',
+    url: 'wss://once.test/socket',
+  })
+  const captured = parseResult(await handler({}))
+
+  assert.equal(callsWhilePending, 1)
+  assert.equal(cdp.listenerCount('Network.webSocketCreated'), 1)
+  assert.equal(cdp.listenerCount('Network.webSocketFrameReceived'), 1)
+  assert.equal(cdp.listenerCount('Network.webSocketFrameSent'), 1)
+  assert.deepEqual(captured.connections.map(({ requestId }) => requestId), ['ws-once'])
+
+  await manager.closeAll()
+})
+
+test('concurrent debugger setup shares one Runtime-local initializer and listener set', async () => {
+  const enableGate = deferred()
+  let enableCalls = 0
+  const { manager, rawSessions } = createContextHarness({
+    send: async ({ method }) => {
+      if (method !== 'Debugger.enable') return
+      enableCalls += 1
+      await enableGate.promise
+    },
+  })
+  const context = mcpContextModule.createMcpContext({ sessionId: 'debugger-concurrent', runtimeManager: manager })
+  const server = fakeServer()
+  registerDebuggerTools(server, context)
+  const handler = server.tools.get('set_breakpoint').handler
+
+  const first = handler({ url: 'https://once.test/app.js', line: 1, column: 0 })
+  const second = handler({ url: 'https://once.test/app.js', line: 2, column: 0 })
+  await setImmediate()
+  const callsWhilePending = enableCalls
+  enableGate.resolve()
+  await Promise.all([first, second])
+
+  const cdp = rawSessions.get('debugger-concurrent')
+  cdp.emit('Debugger.paused', {
+    reason: 'breakpoint',
+    callFrames: [{
+      callFrameId: 'call-once',
+      functionName: 'once',
+      url: 'https://once.test/app.js',
+      location: { lineNumber: 1, columnNumber: 0 },
+    }],
+  })
+  const stack = parseResult(await server.tools.get('get_call_stack').handler({}))
+
+  assert.equal(callsWhilePending, 1)
+  assert.equal(cdp.listenerCount('Debugger.scriptParsed'), 1)
+  assert.equal(cdp.listenerCount('Debugger.paused'), 1)
+  assert.equal(cdp.listenerCount('Debugger.resumed'), 1)
+  assert.deepEqual(stack.stack.map(({ functionName }) => functionName), ['once'])
 
   await manager.closeAll()
 })

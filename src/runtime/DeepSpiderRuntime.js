@@ -69,6 +69,8 @@ export class DeepSpiderRuntime {
     this.activeFrame = { frameId: null, contextId: null }
     this.cdpState = {
       debuggerSession: null,
+      debuggerInitializationPromise: null,
+      debuggerInitializationSession: null,
       rawClient: null,
       isPaused: false,
       currentCallFrames: [],
@@ -79,10 +81,14 @@ export class DeepSpiderRuntime {
       consoleMessages: [],
       consoleTracking: false,
       consoleSession: null,
+      consoleInitializationPromise: null,
+      consoleInitializationSession: null,
       webSocketConnections: [],
       webSocketMessages: [],
       webSocketTracking: false,
       webSocketSession: null,
+      webSocketInitializationPromise: null,
+      webSocketInitializationSession: null,
     }
     this.selectedTarget = null
     this.rebuildContext = null
@@ -197,6 +203,8 @@ export class DeepSpiderRuntime {
     this.cdpSession = null
     this.clearActiveFrameContext()
     this.cdpState.debuggerSession = null
+    this.cdpState.debuggerInitializationPromise = null
+    this.cdpState.debuggerInitializationSession = null
     this.cdpState.rawClient = null
     this.cdpState.isPaused = false
     this.cdpState.currentCallFrames = []
@@ -204,10 +212,14 @@ export class DeepSpiderRuntime {
     this.captures.consoleMessages = []
     this.captures.consoleTracking = false
     this.captures.consoleSession = null
+    this.captures.consoleInitializationPromise = null
+    this.captures.consoleInitializationSession = null
     this.captures.webSocketConnections = []
     this.captures.webSocketMessages = []
     this.captures.webSocketTracking = false
     this.captures.webSocketSession = null
+    this.captures.webSocketInitializationPromise = null
+    this.captures.webSocketInitializationSession = null
   }
 
   close(reason) {
