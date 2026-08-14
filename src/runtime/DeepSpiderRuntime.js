@@ -139,6 +139,20 @@ export class DeepSpiderRuntime {
     return this.cdpSession
   }
 
+  waitForOperation(promise, options = {}) {
+    return waitFor(Promise.resolve(promise), options)
+  }
+
+  async cdpSend(method, params = {}, options = {}) {
+    const { signal, timeout, timeoutMessage = `CDP ${method} timeout` } = options
+    const cdp = await this.getCDPSession({ signal })
+    return this.waitForOperation(cdp.send(method, params), {
+      signal,
+      timeout,
+      timeoutMessage,
+    })
+  }
+
   async cdpEvaluate(expression, options = {}) {
     const {
       returnByValue = true,

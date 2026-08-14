@@ -4,24 +4,16 @@ import test from 'node:test'
 import { setImmediate } from 'node:timers/promises'
 
 import * as mcpContextModule from '../src/mcp/context.js'
-import { registerBrowserTools } from '../src/mcp/tools/browser.js'
-import { registerDebuggerTools } from '../src/mcp/tools/debugger.js'
-import { registerNetworkTools } from '../src/mcp/tools/network.js'
 import { DeepSpiderRuntime } from '../src/runtime/DeepSpiderRuntime.js'
 import { RuntimeManager } from '../src/runtime/RuntimeManager.js'
+import { tools as browserTools } from '../src/tools/groups/browser.js'
+import { tools as debuggerTools } from '../src/tools/groups/debugger.js'
+import { tools as networkTools } from '../src/tools/groups/network.js'
 
-function fakeServer() {
-  const tools = new Map()
-  return {
-    tools,
-    tool(name, description, schema, handler) {
-      tools.set(name, { description, schema, handler })
-    },
-  }
-}
-
-function parseResult(result) {
-  return JSON.parse(result.content[0].text)
+function execute(group, name, runtime, args = {}, signal = new globalThis.AbortController().signal) {
+  const definition = group.find((candidate) => candidate.name === name)
+  assert.ok(definition, `Missing tool definition: ${name}`)
+  return definition.execute(runtime, args, signal)
 }
 
 function deferred() {
@@ -155,19 +147,39 @@ test('navigation clears only the owning Runtime frame and paused debugger state'
   await Promise.all([first.close(), second.close()])
 })
 
+test('Runtime CDP operations reject promptly when their operation signal aborts', async () => {
+  const operation = deferred()
+  const runtime = new DeepSpiderRuntime({
+    sessionId: 'cancel-cdp-operation',
+    paths: { browserData: '/sessions/cancel-cdp-operation/browser-data' },
+    browserFactory: () => ({
+      launch: async () => {},
+      getCDPSession: async () => ({ send: () => operation.promise }),
+      close: async () => {},
+    }),
+    dataStoreFactory: () => ({ close: async () => {} }),
+  })
+  const controller = new globalThis.AbortController()
+  const pending = runtime.cdpSend('Runtime.evaluate', {}, { signal: controller.signal })
+
+  controller.abort(new Error('stop CDP operation'))
+
+  await assert.rejects(pending, /stop CDP operation/)
+  operation.resolve({})
+  await runtime.close()
+})
+
 test('navigate_page reload clears the owning Runtime frame and paused debugger state', async () => {
   const { manager } = createContextHarness()
   const context = mcpContextModule.createMcpContext({ sessionId: 'reload-runtime', runtimeManager: manager })
-  const server = fakeServer()
-  registerBrowserTools(server, context)
   const runtime = await context.getRuntime()
   runtime.activeFrame = { frameId: 'reload-frame', contextId: 3 }
   runtime.cdpState.isPaused = true
   runtime.cdpState.currentCallFrames.push({ callFrameId: 'reload-call' })
 
-  const result = await server.tools.get('navigate_page').handler({ reload: true })
+  const result = await execute(browserTools, 'navigate_page', runtime, { reload: true })
 
-  assert.equal(result.isError, undefined)
+  assert.equal(result, null)
   assert.deepEqual(runtime.activeFrame, { frameId: null, contextId: null })
   assert.equal(runtime.cdpState.isPaused, false)
   assert.deepEqual(runtime.cdpState.currentCallFrames, [])
@@ -179,17 +191,13 @@ test('console and WebSocket listeners are idempotent and capture events only for
   const { manager, rawSessions } = createContextHarness()
   const firstContext = mcpContextModule.createMcpContext({ sessionId: 'listener-first', runtimeManager: manager })
   const secondContext = mcpContextModule.createMcpContext({ sessionId: 'listener-second', runtimeManager: manager })
-  const firstServer = fakeServer()
-  const secondServer = fakeServer()
-  registerBrowserTools(firstServer, firstContext)
-  registerBrowserTools(secondServer, secondContext)
-  registerNetworkTools(firstServer, firstContext)
-  registerNetworkTools(secondServer, secondContext)
+  const firstRuntime = await firstContext.getRuntime()
+  const secondRuntime = await secondContext.getRuntime()
 
-  await firstServer.tools.get('list_console_messages').handler({ level: 'all', limit: 50 })
-  await firstServer.tools.get('list_console_messages').handler({ level: 'all', limit: 50 })
-  await firstServer.tools.get('list_websockets').handler({})
-  await firstServer.tools.get('list_websockets').handler({})
+  await execute(browserTools, 'list_console_messages', firstRuntime, { level: 'all', limit: 50 })
+  await execute(browserTools, 'list_console_messages', firstRuntime, { level: 'all', limit: 50 })
+  await execute(networkTools, 'list_websockets', firstRuntime)
+  await execute(networkTools, 'list_websockets', firstRuntime)
 
   const firstCdp = rawSessions.get('listener-first')
   assert.equal(firstCdp.listenerCount('Runtime.consoleAPICalled'), 1)
@@ -210,11 +218,11 @@ test('console and WebSocket listeners are idempotent and capture events only for
     response: { payloadData: 'first only' },
   })
 
-  const secondConsole = await secondServer.tools.get('list_console_messages').handler({ level: 'all', limit: 50 })
-  const secondSockets = await secondServer.tools.get('list_websockets').handler({})
+  const secondConsole = await execute(browserTools, 'list_console_messages', secondRuntime, { level: 'all', limit: 50 })
+  const secondSockets = await execute(networkTools, 'list_websockets', secondRuntime)
 
-  assert.deepEqual(parseResult(secondConsole), { count: 0, messages: [] })
-  assert.deepEqual(parseResult(secondSockets), { connections: [], messageCount: 0 })
+  assert.deepEqual(secondConsole, { count: 0, messages: [] })
+  assert.deepEqual(secondSockets, { connections: [], messageCount: 0 })
   const secondCdp = rawSessions.get('listener-second')
   assert.equal(secondCdp.listenerCount('Runtime.consoleAPICalled'), 1)
   assert.equal(secondCdp.listenerCount('Network.webSocketCreated'), 1)
@@ -233,9 +241,8 @@ test('concurrent console setup shares one Runtime-local initializer and captures
     },
   })
   const context = mcpContextModule.createMcpContext({ sessionId: 'console-concurrent', runtimeManager: manager })
-  const server = fakeServer()
-  registerBrowserTools(server, context)
-  const handler = server.tools.get('list_console_messages').handler
+  const runtime = await context.getRuntime()
+  const handler = (args) => execute(browserTools, 'list_console_messages', runtime, args)
 
   const first = handler({ level: 'all', limit: 50 })
   const second = handler({ level: 'all', limit: 50 })
@@ -250,7 +257,7 @@ test('concurrent console setup shares one Runtime-local initializer and captures
     args: [{ value: 'once' }],
     timestamp: 1,
   })
-  const captured = parseResult(await handler({ level: 'all', limit: 50 }))
+  const captured = await handler({ level: 'all', limit: 50 })
 
   assert.equal(callsWhilePending, 1)
   assert.equal(cdp.listenerCount('Runtime.consoleAPICalled'), 1)
@@ -269,11 +276,13 @@ test('console setup retries cleanly after one enable failure without retaining a
     },
   })
   const context = mcpContextModule.createMcpContext({ sessionId: 'console-retry', runtimeManager: manager })
-  const server = fakeServer()
-  registerBrowserTools(server, context)
-  const handler = server.tools.get('list_console_messages').handler
+  const runtime = await context.getRuntime()
+  const handler = (args) => execute(browserTools, 'list_console_messages', runtime, args)
 
-  const failed = await handler({ level: 'all', limit: 50 })
+  await assert.rejects(
+    handler({ level: 'all', limit: 50 }),
+    /synthetic Runtime\.enable failure/,
+  )
   const cdp = rawSessions.get('console-retry')
   const listenersAfterFailure = cdp.listenerCount('Runtime.consoleAPICalled')
   const retried = await handler({ level: 'all', limit: 50 })
@@ -282,10 +291,9 @@ test('console setup retries cleanly after one enable failure without retaining a
     args: [{ value: 'retry once' }],
     timestamp: 1,
   })
-  const captured = parseResult(await handler({ level: 'all', limit: 50 }))
+  const captured = await handler({ level: 'all', limit: 50 })
 
-  assert.equal(failed.isError, true)
-  assert.equal(retried.isError, undefined)
+  assert.deepEqual(retried, { count: 0, messages: [] })
   assert.equal(enableCalls, 2)
   assert.equal(listenersAfterFailure, 0)
   assert.equal(cdp.listenerCount('Runtime.consoleAPICalled'), 1)
@@ -305,9 +313,8 @@ test('concurrent WebSocket setup shares one Runtime-local initializer and captur
     },
   })
   const context = mcpContextModule.createMcpContext({ sessionId: 'websocket-concurrent', runtimeManager: manager })
-  const server = fakeServer()
-  registerNetworkTools(server, context)
-  const handler = server.tools.get('list_websockets').handler
+  const runtime = await context.getRuntime()
+  const handler = (args) => execute(networkTools, 'list_websockets', runtime, args)
 
   const first = handler({})
   const second = handler({})
@@ -321,7 +328,7 @@ test('concurrent WebSocket setup shares one Runtime-local initializer and captur
     requestId: 'ws-once',
     url: 'wss://once.test/socket',
   })
-  const captured = parseResult(await handler({}))
+  const captured = await handler({})
 
   assert.equal(callsWhilePending, 1)
   assert.equal(cdp.listenerCount('Network.webSocketCreated'), 1)
@@ -343,9 +350,8 @@ test('concurrent debugger setup shares one Runtime-local initializer and listene
     },
   })
   const context = mcpContextModule.createMcpContext({ sessionId: 'debugger-concurrent', runtimeManager: manager })
-  const server = fakeServer()
-  registerDebuggerTools(server, context)
-  const handler = server.tools.get('set_breakpoint').handler
+  const runtime = await context.getRuntime()
+  const handler = (args) => execute(debuggerTools, 'set_breakpoint', runtime, args)
 
   const first = handler({ url: 'https://once.test/app.js', line: 1, column: 0 })
   const second = handler({ url: 'https://once.test/app.js', line: 2, column: 0 })
@@ -364,7 +370,7 @@ test('concurrent debugger setup shares one Runtime-local initializer and listene
       location: { lineNumber: 1, columnNumber: 0 },
     }],
   })
-  const stack = parseResult(await server.tools.get('get_call_stack').handler({}))
+  const stack = await execute(debuggerTools, 'get_call_stack', runtime)
 
   assert.equal(callsWhilePending, 1)
   assert.equal(cdp.listenerCount('Debugger.scriptParsed'), 1)
@@ -379,8 +385,6 @@ test('select_page clears CDP-derived state only on the selected Runtime', async 
   const { manager } = createContextHarness()
   const firstContext = mcpContextModule.createMcpContext({ sessionId: 'page-first', runtimeManager: manager })
   const secondContext = mcpContextModule.createMcpContext({ sessionId: 'page-second', runtimeManager: manager })
-  const server = fakeServer()
-  registerBrowserTools(server, firstContext)
   const first = await firstContext.getRuntime()
   const second = await secondContext.getRuntime()
   first.activeFrame = { frameId: 'first-frame', contextId: 1 }
@@ -396,9 +400,9 @@ test('select_page clears CDP-derived state only on the selected Runtime', async 
   second.cdpState.isPaused = true
   second.captures.consoleMessages.push({ text: 'second' })
 
-  const result = await server.tools.get('select_page').handler({ index: 1 })
+  const result = await execute(browserTools, 'select_page', first, { index: 1 })
 
-  assert.equal(result.isError, undefined)
+  assert.equal(result.success, true)
   assert.deepEqual(first.activeFrame, { frameId: null, contextId: null })
   assert.equal(first.cdpState.rawClient, null)
   assert.equal(first.cdpState.isPaused, false)
@@ -419,12 +423,10 @@ test('debugger breakpoint and pause state survives another Runtime debugger sess
   const { manager, rawSessions } = createContextHarness()
   const firstContext = mcpContextModule.createMcpContext({ sessionId: 'debug-first', runtimeManager: manager })
   const secondContext = mcpContextModule.createMcpContext({ sessionId: 'debug-second', runtimeManager: manager })
-  const firstServer = fakeServer()
-  const secondServer = fakeServer()
-  registerDebuggerTools(firstServer, firstContext)
-  registerDebuggerTools(secondServer, secondContext)
+  const firstRuntime = await firstContext.getRuntime()
+  const secondRuntime = await secondContext.getRuntime()
 
-  await firstServer.tools.get('set_breakpoint').handler({
+  await execute(debuggerTools, 'set_breakpoint', firstRuntime, {
     url: 'https://first.test/app.js',
     line: 7,
     column: 0,
@@ -438,14 +440,14 @@ test('debugger breakpoint and pause state survives another Runtime debugger sess
       location: { lineNumber: 7, columnNumber: 0 },
     }],
   })
-  await secondServer.tools.get('set_breakpoint').handler({
+  await execute(debuggerTools, 'set_breakpoint', secondRuntime, {
     url: 'https://second.test/app.js',
     line: 9,
     column: 0,
   })
 
-  const secondBreakpoints = parseResult(await secondServer.tools.get('list_breakpoints').handler({}))
-  const firstStack = parseResult(await firstServer.tools.get('get_call_stack').handler({}))
+  const secondBreakpoints = await execute(debuggerTools, 'list_breakpoints', secondRuntime)
+  const firstStack = await execute(debuggerTools, 'get_call_stack', firstRuntime)
 
   assert.deepEqual(secondBreakpoints.breakpoints, [{
     breakpointId: 'debug-second-breakpoint',

@@ -9,6 +9,163 @@ import { DeepSpiderToolError } from '../src/tools/errors.js'
 import { registerMcpCatalog } from '../src/adapters/mcp-tools.js'
 import { createMcpContext } from '../src/mcp/context.js'
 import { RuntimeManager } from '../src/runtime/RuntimeManager.js'
+import { tools as browserTools } from '../src/tools/groups/browser.js'
+import { tools as debuggerTools } from '../src/tools/groups/debugger.js'
+import { tools as hookTools } from '../src/tools/groups/hook.js'
+import { tools as networkTools } from '../src/tools/groups/network.js'
+import { tools as stealthTools } from '../src/tools/groups/stealth.js'
+
+const BROWSER_FACING_CONTRACTS = [
+  ['navigate_page', {
+    url: { type: 'string', description: 'URL to navigate to' },
+    reload: { type: 'boolean', default: false, description: 'Reload current page' },
+  }],
+  ['click', {
+    selector: { type: 'string', required: true, description: 'CSS selector' },
+  }],
+  ['fill', {
+    selector: { type: 'string', required: true, description: 'CSS selector' },
+    value: { type: 'string', required: true, description: 'Value to fill' },
+  }],
+  ['press_key', {
+    key: { type: 'string', required: true, description: 'Key name' },
+  }],
+  ['take_screenshot', {
+    fullPage: { type: 'boolean', default: true, description: 'Capture full page' },
+  }],
+  ['scroll_page', {
+    direction: {
+      type: 'string',
+      enum: ['up', 'down'],
+      required: true,
+      description: 'Scroll direction',
+    },
+    distance: { type: 'number', default: 500, description: 'Scroll distance in pixels' },
+  }],
+  ['wait_for', {
+    selector: { type: 'string', required: true, description: 'CSS selector' },
+    timeout: { type: 'number', default: 30000, description: 'Timeout in ms' },
+    state: {
+      type: 'string',
+      enum: ['attached', 'detached', 'visible', 'hidden'],
+      default: 'attached',
+    },
+  }],
+  ['evaluate_script', {
+    expression: { type: 'string', required: true, description: 'JS expression to evaluate' },
+  }],
+  ['inject_preload_script', {
+    source: { type: 'string', required: true, description: 'JavaScript source to inject' },
+  }],
+  ['list_frames', {}],
+  ['select_frame', {
+    frameId: {
+      type: 'string',
+      required: true,
+      description: 'Frame ID from list_frames. Pass empty string to clear and return to main frame.',
+    },
+  }],
+  ['list_pages', {}],
+  ['select_page', {
+    index: { type: 'number', required: true, description: 'Page index from list_pages' },
+  }],
+  ['save_session_state', {}],
+  ['restore_session_state', {}],
+  ['list_console_messages', {
+    level: { type: 'string', enum: ['all', 'log', 'warning', 'error'], default: 'all' },
+    limit: { type: 'number', default: 50, description: 'Max messages to return' },
+  }],
+  ['get_console_message', {
+    index: { type: 'number', required: true, description: 'Message index from list_console_messages' },
+  }],
+  ['get_dom_structure', {
+    depth: { type: 'number', default: 4, description: 'Max depth to traverse' },
+    selector: { type: 'string', description: 'CSS selector to start from' },
+  }],
+  ['get_storage', {}],
+  ['get_page_info', {
+    includeCookies: { type: 'boolean', default: false },
+    cookieFormat: { type: 'string', enum: ['full', 'header', 'dict'], default: 'full' },
+  }],
+  ['list_network_requests', {
+    site: { type: 'string', description: 'Filter by hostname' },
+    search: { type: 'string', description: 'Search text in response bodies' },
+  }],
+  ['get_network_request', {
+    site: { type: 'string', required: true, description: 'Site hostname' },
+    id: { type: 'string', required: true, description: 'Request ID' },
+  }],
+  ['list_websockets', {}],
+  ['get_websocket_messages', {
+    requestId: { type: 'string', required: true, description: 'WebSocket request ID from list_websockets' },
+    limit: { type: 'number', default: 50, description: 'Max messages' },
+    direction: { type: 'string', enum: ['all', 'sent', 'received'], default: 'all' },
+  }],
+  ['get_request_initiator', {
+    site: { type: 'string', required: true, description: 'Site hostname' },
+    id: { type: 'string', required: true, description: 'Request ID' },
+  }],
+  ['set_breakpoint', {
+    url: { type: 'string', required: true, description: 'Script URL' },
+    line: { type: 'number', required: true, description: 'Line number' },
+    column: { type: 'number', default: 0, description: 'Column number' },
+  }],
+  ['resume', {}],
+  ['step_over', {}],
+  ['evaluate_on_callframe', {
+    expression: { type: 'string', required: true, description: 'JS expression to evaluate' },
+    frameIndex: { type: 'number', default: 0, description: 'Stack frame index' },
+  }],
+  ['get_call_stack', {}],
+  ['get_frame_variables', {
+    frameIndex: { type: 'number', default: 0, description: 'Stack frame index' },
+  }],
+  ['step_into', {}],
+  ['step_out', {}],
+  ['remove_breakpoint', {
+    breakpointId: { type: 'string', required: true, description: 'Breakpoint ID from set_breakpoint' },
+  }],
+  ['list_breakpoints', {}],
+  ['break_on_xhr', {
+    urlPattern: { type: 'string', required: true, description: 'URL substring or pattern to match' },
+  }],
+  ['pause', {}],
+  ['inspect_object', {
+    expression: { type: 'string', required: true, description: 'JS expression evaluating to an object' },
+    frameIndex: { type: 'number', default: 0, description: 'Stack frame index (when paused)' },
+    depth: { type: 'number', default: 2, description: 'Max traversal depth' },
+  }],
+  ['set_breakpoint_on_text', {
+    pattern: { type: 'string', required: true, description: 'Code text to search for (e.g. "encrypt(", "sign =")' },
+    scriptUrl: { type: 'string', description: 'Limit search to specific script URL' },
+  }],
+  ['set_logpoint', {
+    url: { type: 'string', required: true, description: 'Script URL' },
+    line: { type: 'number', required: true, description: 'Line number' },
+    column: { type: 'number', default: 0 },
+    logExpression: { type: 'string', required: true, description: 'JS expression to log, e.g. "arguments[0], arguments[1]"' },
+  }],
+  ['inject_hook', {
+    code: { type: 'string', required: true, description: 'JS code to inject' },
+  }],
+  ['get_hook_data', {
+    type: {
+      type: 'string',
+      description: 'Log type: xhr, fetch, cookie, crypto, json, eval, storage, encoding, websocket, env, debug, dom. Empty for all',
+    },
+    limit: { type: 'number', default: 50 },
+  }],
+  ['search_hook_data', {
+    keyword: { type: 'string', required: true },
+  }],
+  ['toggle_anti_debug', {
+    enabled: {
+      type: 'boolean',
+      required: true,
+      description: 'true = skip debugger statements (safe mode), false = allow debugger pauses (for breakpoints)',
+    },
+  }],
+]
 
 function tool(name, overrides = {}) {
   return defineDeepSpiderTool({
@@ -128,6 +285,97 @@ test('catalog preserves group order, is immutable, and rejects duplicate names',
     () => createToolCatalog([[first], [tool('first')]]),
     /Duplicate tool name: first/,
   )
+})
+
+test('browser-facing groups expose the complete frozen public name and parameter contract', () => {
+  const groups = [browserTools, networkTools, debuggerTools, hookTools, stealthTools]
+  const catalog = createToolCatalog(groups)
+
+  assert.equal(catalog.length, 44)
+  assert.equal(new Set(catalog.map(({ name }) => name)).size, 44)
+  assert.deepEqual(
+    catalog.map(({ name, parameters }) => [name, parameters]),
+    BROWSER_FACING_CONTRACTS,
+  )
+  for (const group of groups) assert.equal(Object.isFrozen(group), true)
+  for (const definition of catalog) {
+    assert.equal(Object.isFrozen(definition), true)
+    assert.equal(Object.isFrozen(definition.parameters), true)
+    assert.equal(definition.execute.length, 3)
+  }
+})
+
+test('representative browser-facing handlers use the supplied Runtime and operation signal', async () => {
+  const signal = new globalThis.AbortController().signal
+  const calls = []
+  const runtime = {
+    captures: {
+      webSocketMessages: [{ requestId: 'ws-1', direction: 'received', data: 'ok' }],
+    },
+    cdpState: { activeBreakpoints: [{ breakpointId: 'break-1' }] },
+    dataStore: {
+      getSiteList() {
+        calls.push(['getSiteList', runtime])
+        return [{ hostname: 'example.test' }]
+      },
+    },
+    async cdpEvaluate(expression, options) {
+      calls.push(['cdpEvaluate', runtime, expression, options.signal])
+      return expression.includes('searchLogs') ? '[]' : 7
+    },
+    async cdpSend(method, params, options) {
+      calls.push(['cdpSend', runtime, method, params, options.signal])
+      return {}
+    },
+    async waitForOperation(promise, options) {
+      calls.push(['waitForOperation', runtime, options.signal])
+      return promise
+    },
+    getActiveFrameContext() {
+      calls.push(['getActiveFrameContext', runtime])
+      return { frameId: null, contextId: null }
+    },
+    async getBrowserClient(options) {
+      calls.push(['getBrowserClient', runtime, options.signal])
+      return {
+        antiDebugInterceptor: {
+          async disablePauses() {
+            calls.push(['disablePauses', runtime])
+          },
+        },
+      }
+    },
+  }
+  const find = (group, name) => group.find((definition) => definition.name === name)
+
+  assert.equal(
+    await find(browserTools, 'evaluate_script').execute(runtime, { expression: '3 + 4' }, signal),
+    7,
+  )
+  assert.deepEqual(
+    await find(networkTools, 'list_network_requests').execute(runtime, {}, signal),
+    [{ hostname: 'example.test' }],
+  )
+  assert.deepEqual(
+    await find(browserTools, 'scroll_page').execute(runtime, { direction: 'down' }, signal),
+    { success: true, direction: 'down', distance: 500 },
+  )
+  assert.deepEqual(
+    await find(debuggerTools, 'list_breakpoints').execute(runtime, {}, signal),
+    { breakpoints: [{ breakpointId: 'break-1' }] },
+  )
+  assert.deepEqual(
+    await find(hookTools, 'search_hook_data').execute(runtime, { keyword: 'token' }, signal),
+    [],
+  )
+  assert.deepEqual(
+    await find(stealthTools, 'toggle_anti_debug').execute(runtime, { enabled: true }, signal),
+    { success: true, antiDebug: 'enabled (skipping debugger statements)' },
+  )
+  assert.equal(calls.every((call) => call.includes(runtime)), true)
+  assert.equal(calls.filter((call) => call[0] === 'cdpEvaluate')[0][3], signal)
+  assert.equal(calls.filter((call) => call[0] === 'cdpSend')[0][4], signal)
+  assert.equal(calls.filter((call) => call[0] === 'getBrowserClient')[0][2], signal)
 })
 
 test('MCP catalog dispatches with the exact Agent and request signal through RuntimeManager', async () => {
