@@ -30,6 +30,25 @@ export class EnvCollector {
         return path.split('.').reduce((o, k) => o && o[k], obj);
       }
 
+      function getPrototypeFacts(value) {
+        if (value === null || value === undefined) {
+          return { brand: Object.prototype.toString.call(value), constructorName: null, prototypeChain: [] };
+        }
+        const boxed = Object(value);
+        const prototypeChain = [];
+        let prototype = Object.getPrototypeOf(boxed);
+        while (prototype && prototypeChain.length < 8) {
+          const name = prototype.constructor?.name;
+          if (name && prototypeChain[prototypeChain.length - 1] !== name) prototypeChain.push(name);
+          prototype = Object.getPrototypeOf(prototype);
+        }
+        return {
+          brand: Object.prototype.toString.call(value),
+          constructorName: boxed.constructor?.name || null,
+          prototypeChain,
+        };
+      }
+
       function serialize(val, currentDepth, maxDepth) {
         if (val === null) return { type: 'null', value: null };
         if (val === undefined) return { type: 'undefined', value: undefined };
@@ -118,28 +137,42 @@ export class EnvCollector {
         const parent = parentPath ? getByPath(window, parentPath) : window;
 
         let descriptor = null;
+        let ownerDepth = null;
         if (parent) {
           try {
-            const desc = Object.getOwnPropertyDescriptor(parent, propName);
-            if (desc) {
-              descriptor = {
-                configurable: desc.configurable,
-                enumerable: desc.enumerable,
-                writable: desc.writable,
-                hasGetter: !!desc.get,
-                hasSetter: !!desc.set
-              };
+            let owner = parent;
+            let depthFromParent = 0;
+            while (owner && depthFromParent < 8) {
+              const desc = Object.getOwnPropertyDescriptor(owner, propName);
+              if (desc) {
+                descriptor = {
+                  configurable: desc.configurable,
+                  enumerable: desc.enumerable,
+                  writable: desc.writable,
+                  hasGetter: !!desc.get,
+                  hasSetter: !!desc.set
+                };
+                ownerDepth = depthFromParent;
+                break;
+              }
+              owner = Object.getPrototypeOf(owner);
+              depthFromParent++;
             }
-          } catch (e) {
+          } catch {
             // 忽略描述符读取错误
           }
         }
+
+        const facts = getPrototypeFacts(value);
 
         return {
           success: true,
           path,
           data: serialized,
-          descriptor
+          descriptor,
+          ownerDepth,
+          ...facts,
+          functionSource: typeof value === 'function' ? Function.prototype.toString.call(value) : null
         };
       } catch (e) {
         return { success: false, error: e.message };
@@ -147,15 +180,18 @@ export class EnvCollector {
     }, { path, depth, includeProto });
 
     // 添加超时
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('采集超时')), timeout)
-    );
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('采集超时')), timeout);
+    });
 
     let result;
     try {
       result = await Promise.race([evaluatePromise, timeoutPromise]);
     } catch (e) {
       result = { success: false, error: e.message };
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     if (result?.success && useCache) {

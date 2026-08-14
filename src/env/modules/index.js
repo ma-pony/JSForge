@@ -41,11 +41,65 @@ export const coveredAPIs = new Set([
  */
 function baseEnvCode() {
   return `
+    const __nativeSources = new WeakMap();
+    const __originalToString = Function.prototype.toString;
+    const __toStringDescriptor = Object.getOwnPropertyDescriptor(Function.prototype, 'toString');
+
+    function __markNative(fn, name) {
+      if (typeof fn !== 'function') return fn;
+      try { Object.defineProperty(fn, 'name', { value: name || fn.name, configurable: true }); } catch {}
+      __nativeSources.set(fn, 'function ' + (name || fn.name || '') + '() { [native code] }');
+      return fn;
+    }
+
+    const __cloakedToString = __markNative(function toString() {
+      return __nativeSources.get(this) || __originalToString.call(this);
+    }, 'toString');
+    Object.defineProperty(Function.prototype, 'toString', {
+      ...__toStringDescriptor,
+      value: __cloakedToString,
+    });
+
+    const __base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    function __btoa(input) {
+      const value = String(input);
+      let output = '';
+      for (let index = 0; index < value.length; index += 3) {
+        const a = value.charCodeAt(index);
+        const b = index + 1 < value.length ? value.charCodeAt(index + 1) : 0;
+        const c = index + 2 < value.length ? value.charCodeAt(index + 2) : 0;
+        if (a > 255 || b > 255 || c > 255) throw new TypeError('Invalid character');
+        output += __base64Chars[a >> 2];
+        output += __base64Chars[((a & 3) << 4) | (b >> 4)];
+        output += index + 1 < value.length ? __base64Chars[((b & 15) << 2) | (c >> 6)] : '=';
+        output += index + 2 < value.length ? __base64Chars[c & 63] : '=';
+      }
+      return output;
+    }
+
+    function __atob(input) {
+      const value = String(input).replace(/\\s/g, '');
+      if (value.length % 4 === 1 || /[^A-Za-z0-9+/=]/.test(value)) throw new TypeError('Invalid character');
+      let output = '';
+      let bits = 0;
+      let bitCount = 0;
+      for (const character of value.replace(/=+$/, '')) {
+        bits = (bits << 6) | __base64Chars.indexOf(character);
+        bitCount += 6;
+        if (bitCount >= 8) {
+          bitCount -= 8;
+          output += String.fromCharCode((bits >> bitCount) & 255);
+        }
+      }
+      return output;
+    }
+
     globalThis.window = globalThis;
     globalThis.self = globalThis;
-    globalThis.global = globalThis;
-    globalThis.atob = globalThis.atob || (function(s) { return Buffer.from(s, 'base64').toString('binary'); });
-    globalThis.btoa = globalThis.btoa || (function(s) { return Buffer.from(s, 'binary').toString('base64'); });
+    globalThis.top = globalThis;
+    globalThis.parent = globalThis;
+    globalThis.atob = __markNative(__atob, 'atob');
+    globalThis.btoa = __markNative(__btoa, 'btoa');
   `;
 }
 
@@ -68,5 +122,30 @@ export function buildEnvCode(pageData) {
     fetchCode,                                          // 结构性
     xhrCode,                                            // 结构性
   ];
-  return parts.join('\n\n');
+  return `(function buildDeepSpiderEnvironment() {
+${parts.join('\n\n')}
+
+  function __cloakObject(object, depth, seen = new WeakSet()) {
+    if ((typeof object !== 'object' && typeof object !== 'function') || object === null || seen.has(object)) return;
+    seen.add(object);
+    for (const name of Object.getOwnPropertyNames(object)) {
+      let descriptor;
+      try { descriptor = Object.getOwnPropertyDescriptor(object, name); } catch { continue; }
+      if (!descriptor) continue;
+      if (typeof descriptor.value === 'function') __markNative(descriptor.value, descriptor.value.name || name);
+      if (descriptor.get) __markNative(descriptor.get, 'get ' + name);
+      if (descriptor.set) __markNative(descriptor.set, 'set ' + name);
+      if (depth > 0 && descriptor.value && typeof descriptor.value === 'object') {
+        __cloakObject(descriptor.value, depth - 1, seen);
+      }
+    }
+    const prototype = Object.getPrototypeOf(object);
+    if (prototype && depth > 0) __cloakObject(prototype, depth - 1, seen);
+  }
+
+  [globalThis.document, globalThis.navigator, globalThis.screen, globalThis.history,
+   globalThis.localStorage, globalThis.sessionStorage, globalThis.Element,
+   globalThis.Event, globalThis.CustomEvent, globalThis.URL, globalThis.URLSearchParams]
+    .forEach((value) => __cloakObject(value, 2));
+})();`;
 }
