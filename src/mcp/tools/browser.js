@@ -4,14 +4,20 @@
 
 import { z } from 'zod';
 import { join } from 'path';
-import { getBrowserClient, getPage, getCDPSession, cdpEvaluate, navigateTo, setActiveFrameContext, clearActiveFrameContext, getActiveFrameContext } from '../context.js';
 import { PATHS, ensureDir, generateFilename } from '../../config/paths.js';
 
-let _savedSessionState = null;
-let _consoleMessages = [];
-let _consoleTracking = false;
-
-export function registerBrowserTools(server) {
+export function registerBrowserTools(server, dependencies) {
+  const {
+    getRuntime,
+    getBrowserClient,
+    getPage,
+    getCDPSession,
+    cdpEvaluate,
+    navigateTo,
+    setActiveFrameContext,
+    clearActiveFrameContext,
+    getActiveFrameContext,
+  } = dependencies;
   server.tool(
     'navigate_page',
     'Navigate to URL or reload current page',
@@ -27,6 +33,8 @@ export function registerBrowserTools(server) {
           return { content: [{ type: 'text', text: JSON.stringify({ url: finalUrl, title }) }] };
         }
         if (reload) {
+          const runtime = await getRuntime();
+          runtime.clearNavigationDerivedState();
           const cdp = await getCDPSession();
           await cdp.send('Page.reload');
           await new Promise(r => setTimeout(r, 1000));
@@ -163,7 +171,7 @@ export function registerBrowserTools(server) {
         // evaluated value (existing consumers parse this directly). Only wrap in
         // an envelope when an iframe context is active, so callers can tell which
         // frame produced the value.
-        const frameCtx = getActiveFrameContext();
+        const frameCtx = await getActiveFrameContext();
         const payload = frameCtx.contextId != null
           ? { frameId: frameCtx.frameId, value }
           : value;
@@ -225,7 +233,7 @@ export function registerBrowserTools(server) {
     async ({ frameId }) => {
       try {
         if (!frameId) {
-          clearActiveFrameContext();
+          await clearActiveFrameContext();
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, cleared: true }) }] };
         }
         const cdp = await getCDPSession();
@@ -233,7 +241,7 @@ export function registerBrowserTools(server) {
         const { executionContextId } = await cdp.send('Page.createIsolatedWorld', {
           frameId, worldName: 'deepspider',
         });
-        setActiveFrameContext(frameId, executionContextId);
+        await setActiveFrameContext(frameId, executionContextId);
         return { content: [{ type: 'text', text: JSON.stringify({ success: true, frameId, executionContextId, note: 'subsequent evaluate/cdpEvaluate calls will run in this frame until cleared' }) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -279,12 +287,11 @@ export function registerBrowserTools(server) {
           return { content: [{ type: 'text', text: JSON.stringify({ error: `Index ${index} out of range (${pages.length} pages)` }) }], isError: true };
         }
         // Switching tabs invalidates any iframe context bound to the previous page.
-        clearActiveFrameContext();
-        // Console listener was attached to the previous page's CDP session; drop it
-        // so list_console_messages re-subscribes on the new session.
-        _consoleTracking = false;
-        _consoleMessages = [];
+        await clearActiveFrameContext();
+        const runtime = await getRuntime();
+        runtime.clearPageDerivedState();
         client.page = pages[index];
+        runtime.page = pages[index];
         await pages[index].bringToFront();
         const url = pages[index].url();
         const title = await pages[index].title();
@@ -310,8 +317,8 @@ export function registerBrowserTools(server) {
         })`);
 
         const state = { url: pageUrl, cookies, ...storage, savedAt: new Date().toISOString() };
-        // Store in memory on the module
-        _savedSessionState = state;
+        const runtime = await getRuntime();
+        runtime.captures.savedSessionState = state;
         return { content: [{ type: 'text', text: JSON.stringify({ success: true, url: pageUrl, cookieCount: cookies.length }) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -325,23 +332,25 @@ export function registerBrowserTools(server) {
     {},
     async () => {
       try {
-        if (!_savedSessionState) {
+        const runtime = await getRuntime();
+        const savedSessionState = runtime.captures.savedSessionState;
+        if (!savedSessionState) {
           return { content: [{ type: 'text', text: JSON.stringify({ error: 'No saved state. Call save_session_state first.' }) }], isError: true };
         }
 
         const cdp = await getCDPSession();
         // Restore cookies
-        for (const cookie of _savedSessionState.cookies) {
+        for (const cookie of savedSessionState.cookies) {
           await cdp.send('Network.setCookie', cookie);
         }
         // Restore localStorage and sessionStorage
-        const ls = _savedSessionState.localStorage || {};
-        const ss = _savedSessionState.sessionStorage || {};
+        const ls = savedSessionState.localStorage || {};
+        const ss = savedSessionState.sessionStorage || {};
         await cdpEvaluate(`
           ${Object.entries(ls).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')};
           ${Object.entries(ss).map(([k, v]) => `sessionStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')};
         `);
-        return { content: [{ type: 'text', text: JSON.stringify({ success: true, savedAt: _savedSessionState.savedAt }) }] };
+        return { content: [{ type: 'text', text: JSON.stringify({ success: true, savedAt: savedSessionState.savedAt }) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
       }
@@ -357,11 +366,19 @@ export function registerBrowserTools(server) {
     },
     async ({ level, limit }) => {
       try {
-        // Enable console tracking on first call
-        if (!_consoleTracking) {
-          const cdp = await getCDPSession();
+        const runtime = await getRuntime();
+        const captures = runtime.captures;
+        const cdp = await getCDPSession();
+        if (captures.consoleSession !== cdp) {
+          captures.consoleMessages = [];
+          captures.consoleTracking = false;
+          captures.consoleSession = cdp;
+        }
+        // Enable console tracking once for this Runtime and raw CDP session.
+        if (!captures.consoleTracking) {
           cdp.on('Runtime.consoleAPICalled', (params) => {
-            _consoleMessages.push({
+            if (captures.consoleSession !== cdp) return;
+            captures.consoleMessages.push({
               type: params.type,
               text: params.args?.map(a => a.value ?? a.description ?? '').join(' '),
               timestamp: params.timestamp,
@@ -369,13 +386,13 @@ export function registerBrowserTools(server) {
               line: params.stackTrace?.callFrames?.[0]?.lineNumber,
             });
             // Cap at 500 messages
-            if (_consoleMessages.length > 500) _consoleMessages.shift();
+            if (captures.consoleMessages.length > 500) captures.consoleMessages.shift();
           });
           await cdp.send('Runtime.enable');
-          _consoleTracking = true;
+          captures.consoleTracking = true;
         }
 
-        let messages = _consoleMessages;
+        let messages = captures.consoleMessages;
         if (level !== 'all') {
           messages = messages.filter(m => m.type === level);
         }
@@ -395,10 +412,12 @@ export function registerBrowserTools(server) {
     },
     async ({ index }) => {
       try {
-        if (index < 0 || index >= _consoleMessages.length) {
-          return { content: [{ type: 'text', text: JSON.stringify({ error: `Index ${index} out of range (${_consoleMessages.length} messages)` }) }], isError: true };
+        const runtime = await getRuntime();
+        const messages = runtime.captures.consoleMessages;
+        if (index < 0 || index >= messages.length) {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: `Index ${index} out of range (${messages.length} messages)` }) }], isError: true };
         }
-        return { content: [{ type: 'text', text: JSON.stringify(_consoleMessages[index], null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(messages[index], null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
       }

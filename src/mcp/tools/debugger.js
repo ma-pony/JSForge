@@ -3,61 +3,62 @@
  */
 
 import { z } from 'zod';
-import { getBrowserClient, getDataStore } from '../context.js';
 import { CDPSession } from '../../browser/cdp.js';
-
-let cdpSession = null;
-let cdpSessionRawClient = null; // 追踪底层 raw CDP client 身份，用于检测 page 切换
-let isPaused = false;
-let currentCallFrames = [];
-let activeBreakpoints = [];
 
 /**
  * 获取 CDP 调试会话。
  * select_page 或 popup 切换后 BrowserClient.getCDPSession() 会返回新的 raw client，
  * 此时必须重建 CDPSession wrapper，否则断点/求值会打到已 detach 的旧页面。
  */
-async function getSession() {
-  const browserClient = await getBrowserClient();
-  const rawClient = await browserClient.getCDPSession();
+async function getSession(dependencies) {
+  const runtime = await dependencies.getRuntime();
+  const state = runtime.cdpState;
+  const rawClient = await dependencies.getCDPSession();
 
-  if (cdpSession && cdpSessionRawClient === rawClient) {
-    return cdpSession;
+  if (state.debuggerSession && state.rawClient === rawClient) {
+    return state.debuggerSession;
   }
 
   // 清理过期状态（pause 事件是旧会话的，新会话 Debugger.paused 会重新触发）
-  isPaused = false;
-  currentCallFrames = [];
+  state.isPaused = false;
+  state.currentCallFrames = [];
+  state.activeBreakpoints = [];
 
-  cdpSession = await CDPSession.fromBrowser(browserClient);
-  cdpSessionRawClient = rawClient;
+  const session = new CDPSession(rawClient);
+  await session.enable();
+  state.debuggerSession = session;
+  state.rawClient = rawClient;
 
-  cdpSession.on('Debugger.paused', (params) => {
+  session.on('Debugger.paused', (params) => {
+    if (state.debuggerSession !== session) return;
     const isBreakpoint = params.reason === 'breakpoint' || params.hitBreakpoints?.length > 0;
     if (isBreakpoint) {
-      isPaused = true;
-      currentCallFrames = params.callFrames || [];
-      const top = currentCallFrames[0];
+      state.isPaused = true;
+      state.currentCallFrames = params.callFrames || [];
+      const top = state.currentCallFrames[0];
       console.error(`[debug] Breakpoint hit: ${top?.functionName || '(anonymous)'} @ ${top?.url?.split('/').pop() || '?'}:${top?.location?.lineNumber ?? '?'}`);
     }
   });
 
-  cdpSession.on('Debugger.resumed', () => {
-    isPaused = false;
-    currentCallFrames = [];
+  session.on('Debugger.resumed', () => {
+    if (state.debuggerSession !== session) return;
+    state.isPaused = false;
+    state.currentCallFrames = [];
   });
 
-  return cdpSession;
+  return session;
 }
 
-function checkPaused() {
-  if (!isPaused || currentCallFrames.length === 0) {
+function checkPaused(state) {
+  if (!state.isPaused || state.currentCallFrames.length === 0) {
     return { error: 'Debugger not paused. Set a breakpoint and trigger it first.' };
   }
   return null;
 }
 
-export function registerDebuggerTools(server) {
+export function registerDebuggerTools(server, dependencies) {
+  const { getRuntime, getBrowserClient, getDataStore } = dependencies;
+  const getDebuggerState = async () => (await getRuntime()).cdpState;
   server.tool(
     'set_breakpoint',
     'Set breakpoint at specified location. Automatically disables anti-debug skip.',
@@ -72,9 +73,10 @@ export function registerDebuggerTools(server) {
         if (client?.antiDebugInterceptor) {
           await client.antiDebugInterceptor.enablePauses();
         }
-        const session = await getSession();
+        const session = await getSession(dependencies);
+        const state = await getDebuggerState();
         const result = await session.setBreakpoint(url, line, column);
-        activeBreakpoints.push({ breakpointId: result.breakpointId, url, line, column });
+        state.activeBreakpoints.push({ breakpointId: result.breakpointId, url, line, column });
         return { content: [{ type: 'text', text: JSON.stringify({ success: true, breakpointId: result.breakpointId }) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -88,10 +90,11 @@ export function registerDebuggerTools(server) {
     {},
     async () => {
       try {
-        const session = await getSession();
+        const session = await getSession(dependencies);
+        const state = await getDebuggerState();
         await session.send('Debugger.resume');
-        isPaused = false;
-        currentCallFrames = [];
+        state.isPaused = false;
+        state.currentCallFrames = [];
         return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -105,7 +108,7 @@ export function registerDebuggerTools(server) {
     {},
     async () => {
       try {
-        const session = await getSession();
+        const session = await getSession(dependencies);
         await session.send('Debugger.stepOver');
         return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
       } catch (err) {
@@ -123,15 +126,16 @@ export function registerDebuggerTools(server) {
     },
     async ({ expression, frameIndex }) => {
       try {
-        const session = await getSession();
-        const pauseError = checkPaused();
+        const session = await getSession(dependencies);
+        const state = await getDebuggerState();
+        const pauseError = checkPaused(state);
         if (pauseError) return { content: [{ type: 'text', text: JSON.stringify(pauseError) }] };
 
-        if (frameIndex >= currentCallFrames.length) {
-          return { content: [{ type: 'text', text: JSON.stringify({ error: `Frame index ${frameIndex} out of range (${currentCallFrames.length} frames)` }) }] };
+        if (frameIndex >= state.currentCallFrames.length) {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: `Frame index ${frameIndex} out of range (${state.currentCallFrames.length} frames)` }) }] };
         }
 
-        const callFrameId = currentCallFrames[frameIndex].callFrameId;
+        const callFrameId = state.currentCallFrames[frameIndex].callFrameId;
         const { result, exceptionDetails } = await session.send('Debugger.evaluateOnCallFrame', {
           callFrameId, expression, returnByValue: true,
         });
@@ -152,11 +156,12 @@ export function registerDebuggerTools(server) {
     {},
     async () => {
       try {
-        await getSession();
-        const pauseError = checkPaused();
+        await getSession(dependencies);
+        const state = await getDebuggerState();
+        const pauseError = checkPaused(state);
         if (pauseError) return { content: [{ type: 'text', text: JSON.stringify(pauseError) }] };
 
-        const stack = currentCallFrames.map((frame, i) => ({
+        const stack = state.currentCallFrames.map((frame, i) => ({
           index: i,
           functionName: frame.functionName || '(anonymous)',
           url: frame.url,
@@ -178,15 +183,16 @@ export function registerDebuggerTools(server) {
     },
     async ({ frameIndex }) => {
       try {
-        const session = await getSession();
-        const pauseError = checkPaused();
+        const session = await getSession(dependencies);
+        const state = await getDebuggerState();
+        const pauseError = checkPaused(state);
         if (pauseError) return { content: [{ type: 'text', text: JSON.stringify(pauseError) }] };
 
-        if (frameIndex >= currentCallFrames.length) {
+        if (frameIndex >= state.currentCallFrames.length) {
           return { content: [{ type: 'text', text: JSON.stringify({ error: `Frame index ${frameIndex} out of range` }) }] };
         }
 
-        const callFrameId = currentCallFrames[frameIndex].callFrameId;
+        const callFrameId = state.currentCallFrames[frameIndex].callFrameId;
         const { result } = await session.send('Debugger.evaluateOnCallFrame', {
           callFrameId,
           expression: '(function() { var vars = {}; for (var k in this) vars[k] = typeof this[k]; return JSON.stringify(vars); })()',
@@ -205,7 +211,7 @@ export function registerDebuggerTools(server) {
     {},
     async () => {
       try {
-        const session = await getSession();
+        const session = await getSession(dependencies);
         await session.send('Debugger.stepInto');
         return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
       } catch (err) {
@@ -220,7 +226,7 @@ export function registerDebuggerTools(server) {
     {},
     async () => {
       try {
-        const session = await getSession();
+        const session = await getSession(dependencies);
         await session.send('Debugger.stepOut');
         return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
       } catch (err) {
@@ -237,9 +243,10 @@ export function registerDebuggerTools(server) {
     },
     async ({ breakpointId }) => {
       try {
-        const session = await getSession();
+        const session = await getSession(dependencies);
+        const state = await getDebuggerState();
         await session.send('Debugger.removeBreakpoint', { breakpointId });
-        activeBreakpoints = activeBreakpoints.filter(b => b.breakpointId !== breakpointId);
+        state.activeBreakpoints = state.activeBreakpoints.filter(b => b.breakpointId !== breakpointId);
         return { content: [{ type: 'text', text: JSON.stringify({ success: true, removed: breakpointId }) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -253,7 +260,8 @@ export function registerDebuggerTools(server) {
     {},
     async () => {
       try {
-        return { content: [{ type: 'text', text: JSON.stringify({ breakpoints: activeBreakpoints }, null, 2) }] };
+        const state = await getDebuggerState();
+        return { content: [{ type: 'text', text: JSON.stringify({ breakpoints: state.activeBreakpoints }, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
       }
@@ -268,7 +276,7 @@ export function registerDebuggerTools(server) {
     },
     async ({ urlPattern }) => {
       try {
-        const session = await getSession();
+        const session = await getSession(dependencies);
         const client = await getBrowserClient();
         if (client?.antiDebugInterceptor) {
           await client.antiDebugInterceptor.enablePauses();
@@ -291,7 +299,7 @@ export function registerDebuggerTools(server) {
         if (client?.antiDebugInterceptor) {
           await client.antiDebugInterceptor.enablePauses();
         }
-        const session = await getSession();
+        const session = await getSession(dependencies);
         await session.send('Debugger.pause');
         return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
       } catch (err) {
@@ -310,11 +318,12 @@ export function registerDebuggerTools(server) {
     },
     async ({ expression, frameIndex, depth: _depth }) => {
       try {
-        const session = await getSession();
+        const session = await getSession(dependencies);
+        const state = await getDebuggerState();
 
         let objectId;
-        if (isPaused && currentCallFrames.length > 0 && frameIndex < currentCallFrames.length) {
-          const callFrameId = currentCallFrames[frameIndex].callFrameId;
+        if (state.isPaused && state.currentCallFrames.length > 0 && frameIndex < state.currentCallFrames.length) {
+          const callFrameId = state.currentCallFrames[frameIndex].callFrameId;
           const evalResult = await session.send('Debugger.evaluateOnCallFrame', {
             callFrameId, expression, returnByValue: false,
           });
@@ -366,7 +375,7 @@ export function registerDebuggerTools(server) {
 
         // Use DataStore to search scripts. searchInScripts's second arg is a site/hostname filter,
         // not a scriptUrl filter — so we search all sites and then filter by scriptUrl ourselves.
-        const store = getDataStore();
+        const store = await getDataStore();
         let matches = await store.searchInScripts(pattern, null);
 
         if (scriptUrl) {
@@ -388,9 +397,10 @@ export function registerDebuggerTools(server) {
         const column = idx - lastNewline - 1;
         const match = { url: firstMatch.url, scriptId: firstMatch.id, line, column };
 
-        const session = await getSession();
+        const session = await getSession(dependencies);
+        const state = await getDebuggerState();
         const result = await session.setBreakpoint(match.url, match.line, match.column);
-        activeBreakpoints.push({ breakpointId: result.breakpointId, ...match });
+        state.activeBreakpoints.push({ breakpointId: result.breakpointId, ...match });
         return { content: [{ type: 'text', text: JSON.stringify({ success: true, breakpointId: result.breakpointId, ...match }) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -409,7 +419,7 @@ export function registerDebuggerTools(server) {
     },
     async ({ url, line, column, logExpression }) => {
       try {
-        const session = await getSession();
+        const session = await getSession(dependencies);
         const condition = `(console.log('[logpoint]', ${logExpression}), false)`;
         const result = await session.client.send('Debugger.setBreakpointByUrl', {
           url, lineNumber: line, columnNumber: column, condition,

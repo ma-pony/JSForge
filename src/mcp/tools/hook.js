@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { cdpEvaluate } from '../context.js';
 
-export function registerHookTools(server) {
+export function registerHookTools(server, dependencies) {
+  const { cdpEvaluate } = dependencies;
   server.tool(
     'inject_hook',
     'Inject custom Hook code into browser page. The code runs in page context with access to window.__deepspider__ API.',

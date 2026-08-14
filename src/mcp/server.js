@@ -14,26 +14,27 @@ import { registerHookTools } from './tools/hook.js';
 import { registerCaptureTools } from './tools/capture.js';
 import { registerRebuildTools } from './tools/rebuild.js';
 import { registerStealthTools } from './tools/stealth.js';
-import { cleanup } from './context.js';
+import { createMcpContext } from './context.js';
 import { installMcpShutdown } from './lifecycle.js';
 
 const server = new McpServer(
   { name: 'deepspider', version: '1.0.0' }
 );
+const context = createMcpContext({ sessionId: 'mcp-stdio' });
 
 // Register all tool groups
-registerBrowserTools(server);
-registerNetworkTools(server);
-registerScriptTools(server);
-registerDebuggerTools(server);
-registerHookTools(server);
-registerCaptureTools(server);
-registerRebuildTools(server);
-registerStealthTools(server);
+registerBrowserTools(server, context);
+registerNetworkTools(server, context);
+registerScriptTools(server, context);
+registerDebuggerTools(server, context);
+registerHookTools(server, context);
+registerCaptureTools(server, context);
+registerRebuildTools(server, context);
+registerStealthTools(server, context);
 
 installMcpShutdown({
   cleanupFn: async () => {
-    await cleanup();
+    await context.cleanup();
     await server.close();
   },
 });
@@ -47,6 +48,6 @@ async function main() {
 
 main().catch(async (err) => {
   console.error('MCP server failed to start:', err);
-  await cleanup();
+  await context.cleanup();
   process.exit(1);
 });

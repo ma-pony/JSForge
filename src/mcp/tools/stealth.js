@@ -3,9 +3,9 @@
  */
 
 import { z } from 'zod';
-import { getBrowserClient } from '../context.js';
 
-export function registerStealthTools(server) {
+export function registerStealthTools(server, dependencies) {
+  const { getBrowserClient } = dependencies;
   server.tool(
     'toggle_anti_debug',
     'Toggle anti-debug protection. When enabled (default), debugger statements are skipped. Disable before setting breakpoints.',

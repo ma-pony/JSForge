@@ -1,8 +1,7 @@
-import { getDataStore } from '../context.js';
 import { z } from 'zod';
 
 export function registerScriptTools(server, dependencies = {}) {
-  const getStore = dependencies.getStore || getDataStore;
+  const getStore = dependencies.getStore || dependencies.getDataStore;
 
   server.tool(
     'list_scripts',
@@ -10,7 +9,7 @@ export function registerScriptTools(server, dependencies = {}) {
     { site: z.string().optional() },
     async ({ site }) => {
       try {
-        const store = getStore();
+        const store = await getStore();
         const scripts = await store.getScriptList(site || null, true);
         return {
           content: [{ type: 'text', text: JSON.stringify(scripts, null, 2) }],
@@ -35,7 +34,7 @@ export function registerScriptTools(server, dependencies = {}) {
     },
     async ({ site, id, offset, limit }) => {
       try {
-        const store = getStore();
+        const store = await getStore();
         const source = await store.getScript(site, id);
         const total = source.length;
         const content = source.slice(offset, offset + limit);
@@ -68,7 +67,7 @@ export function registerScriptTools(server, dependencies = {}) {
     },
     async ({ text, site, contextChars }) => {
       try {
-        const store = getStore();
+        const store = await getStore();
         const matches = await store.searchInScripts(text, site || null);
         const found = matches.length > 0;
         const count = matches.length;

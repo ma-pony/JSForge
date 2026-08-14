@@ -17,7 +17,6 @@ import {
 } from '../../rebuild/bundle.js'
 import { buildProbeCode, buildRunnerCode } from '../../rebuild/runtime-template.js'
 import { analyzeTrace, parseTrace } from '../../rebuild/trace.js'
-import { getDataStore, getPage } from '../context.js'
 
 const DEFAULT_REBUILD_DIR = path.join(os.homedir(), '.deepspider', 'rebuild')
 
@@ -39,13 +38,13 @@ function validateSegment(value, label) {
 
 export function registerRebuildTools(server, dependencies = {}) {
   const rebuildDir = dependencies.rebuildDir || DEFAULT_REBUILD_DIR
-  const getStore = dependencies.getStore || getDataStore
+  const getStore = dependencies.getStore || dependencies.getDataStore
   const collectPageData = dependencies.collectPageData || (async () => {
-    const page = await getPage()
+    const page = await dependencies.getPage()
     return new EnvBridge(page).collectPageData()
   })
   const getPageUrl = dependencies.getPageUrl || (async () => {
-    const page = await getPage()
+    const page = await dependencies.getPage()
     return page.url()
   })
   const buildEnvironment = dependencies.buildEnvironment || buildEnvCode
@@ -71,7 +70,7 @@ export function registerRebuildTools(server, dependencies = {}) {
           return jsonResult({ error: `Rebuild task "${taskId}" already exists; use a new taskId` }, true)
         }
 
-        const store = getStore()
+        const store = await getStore()
         const sessionId = store.getSessionId()
         const currentScripts = await store.getScriptList(null, true)
         const script = selectCurrentSessionScript(currentScripts, scriptId, sessionId)

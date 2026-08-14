@@ -3,13 +3,12 @@
  */
 
 import { z } from 'zod';
-import { getPage, getActiveFrameContext, cdpEvaluate } from '../context.js';
 import { EnvCollector, collectPropertyInRealm } from '../../browser/collector.js';
 
 export function registerCaptureTools(server, dependencies = {}) {
-  const getCurrentPage = dependencies.getPage || getPage;
-  const getFrameContext = dependencies.getFrameContext || getActiveFrameContext;
-  const evaluateFrame = dependencies.evaluateFrame || cdpEvaluate;
+  const getCurrentPage = dependencies.getPage;
+  const getFrameContext = dependencies.getFrameContext || dependencies.getActiveFrameContext;
+  const evaluateFrame = dependencies.evaluateFrame || dependencies.cdpEvaluate;
 
   server.tool(
     'collect_env',
@@ -36,7 +35,7 @@ export function registerCaptureTools(server, dependencies = {}) {
     },
     async ({ path, depth }) => {
       try {
-        const frameCtx = getFrameContext();
+        const frameCtx = await getFrameContext();
         // When a specific iframe is selected, use CDP Runtime.evaluate in that context.
         // (EnvCollector uses page.evaluate which always targets the main frame.)
         if (frameCtx.contextId != null) {

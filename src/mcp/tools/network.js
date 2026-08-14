@@ -3,13 +3,9 @@
  */
 
 import { z } from 'zod';
-import { getDataStore, getCDPSession } from '../context.js';
 
-// WebSocket tracking (populated via CDP events)
-let wsConnections = [];
-let wsMessages = [];
-
-export function registerNetworkTools(server) {
+export function registerNetworkTools(server, dependencies) {
+  const { getRuntime, getDataStore, getCDPSession } = dependencies;
   server.tool(
     'list_network_requests',
     'List captured network requests. Use search to find specific content in responses.',
@@ -19,7 +15,7 @@ export function registerNetworkTools(server) {
     },
     async ({ site, search }) => {
       try {
-        const store = getDataStore();
+        const store = await getDataStore();
         if (search) {
           const results = await store.searchInResponses(search, site || null);
           return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
@@ -49,7 +45,7 @@ export function registerNetworkTools(server) {
     },
     async ({ site, id }) => {
       try {
-        const store = getDataStore();
+        const store = await getDataStore();
         const result = await store.getResponse(site, id);
         if (!result) {
           return { content: [{ type: 'text', text: JSON.stringify({ error: 'Request not found' }) }], isError: true };
@@ -67,21 +63,33 @@ export function registerNetworkTools(server) {
     {},
     async () => {
       try {
+        const runtime = await getRuntime();
+        const captures = runtime.captures;
         const cdp = await getCDPSession();
-        // Enable WebSocket tracking if not already
-        if (wsConnections.length === 0) {
+        if (captures.webSocketSession !== cdp) {
+          captures.webSocketConnections = [];
+          captures.webSocketMessages = [];
+          captures.webSocketTracking = false;
+          captures.webSocketSession = cdp;
+        }
+        // Enable WebSocket tracking once for this Runtime and raw CDP session.
+        if (!captures.webSocketTracking) {
           cdp.on('Network.webSocketCreated', (params) => {
-            wsConnections.push({ requestId: params.requestId, url: params.url, timestamp: Date.now() });
+            if (captures.webSocketSession !== cdp) return;
+            captures.webSocketConnections.push({ requestId: params.requestId, url: params.url, timestamp: Date.now() });
           });
           cdp.on('Network.webSocketFrameReceived', (params) => {
-            wsMessages.push({ requestId: params.requestId, direction: 'received', data: params.response?.payloadData, timestamp: Date.now() });
+            if (captures.webSocketSession !== cdp) return;
+            captures.webSocketMessages.push({ requestId: params.requestId, direction: 'received', data: params.response?.payloadData, timestamp: Date.now() });
           });
           cdp.on('Network.webSocketFrameSent', (params) => {
-            wsMessages.push({ requestId: params.requestId, direction: 'sent', data: params.response?.payloadData, timestamp: Date.now() });
+            if (captures.webSocketSession !== cdp) return;
+            captures.webSocketMessages.push({ requestId: params.requestId, direction: 'sent', data: params.response?.payloadData, timestamp: Date.now() });
           });
           await cdp.send('Network.enable');
+          captures.webSocketTracking = true;
         }
-        return { content: [{ type: 'text', text: JSON.stringify({ connections: wsConnections, messageCount: wsMessages.length }, null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify({ connections: captures.webSocketConnections, messageCount: captures.webSocketMessages.length }, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
       }
@@ -98,7 +106,8 @@ export function registerNetworkTools(server) {
     },
     async ({ requestId, limit, direction }) => {
       try {
-        let msgs = wsMessages.filter(m => m.requestId === requestId);
+        const runtime = await getRuntime();
+        let msgs = runtime.captures.webSocketMessages.filter(m => m.requestId === requestId);
         if (direction !== 'all') {
           msgs = msgs.filter(m => m.direction === direction);
         }
@@ -119,7 +128,7 @@ export function registerNetworkTools(server) {
     },
     async ({ site, id }) => {
       try {
-        const store = getDataStore();
+        const store = await getDataStore();
         const result = await store.getResponse(site, id);
         if (!result) {
           return { content: [{ type: 'text', text: JSON.stringify({ error: 'Request not found' }) }], isError: true };

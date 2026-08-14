@@ -66,8 +66,11 @@ test('DeepSpiderRuntime owns explicit session state and launches its browser laz
     savedSessionState: null,
     consoleMessages: [],
     consoleTracking: false,
+    consoleSession: null,
     webSocketConnections: [],
     webSocketMessages: [],
+    webSocketTracking: false,
+    webSocketSession: null,
   })
   assert.equal(runtime.selectedTarget, null)
   assert.equal(runtime.rebuildContext, null)

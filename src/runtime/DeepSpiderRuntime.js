@@ -68,6 +68,7 @@ export class DeepSpiderRuntime {
     this.cdpSession = null
     this.activeFrame = { frameId: null, contextId: null }
     this.cdpState = {
+      debuggerSession: null,
       rawClient: null,
       isPaused: false,
       currentCallFrames: [],
@@ -77,8 +78,11 @@ export class DeepSpiderRuntime {
       savedSessionState: null,
       consoleMessages: [],
       consoleTracking: false,
+      consoleSession: null,
       webSocketConnections: [],
       webSocketMessages: [],
+      webSocketTracking: false,
+      webSocketSession: null,
     }
     this.selectedTarget = null
     this.rebuildContext = null
@@ -119,8 +123,12 @@ export class DeepSpiderRuntime {
 
   async getCDPSession({ signal } = {}) {
     const client = await this.getBrowserClient({ signal })
-    this.cdpSession = await waitFor(Promise.resolve(client.getCDPSession()), { signal })
-    if (!this.cdpSession) throw new Error('CDP session unavailable')
+    const nextSession = await waitFor(Promise.resolve(client.getCDPSession()), { signal })
+    if (!nextSession) throw new Error('CDP session unavailable')
+    if (this.cdpSession && this.cdpSession !== nextSession) {
+      this.clearPageDerivedState()
+    }
+    this.cdpSession = nextSession
     throwIfAborted(signal)
     return this.cdpSession
   }
@@ -158,9 +166,48 @@ export class DeepSpiderRuntime {
 
   async navigateTo(url, options = {}) {
     const { signal } = options
-    this.activeFrame = { frameId: null, contextId: null }
+    this.clearNavigationDerivedState()
     const client = await this.getBrowserClient({ signal })
     return waitFor(Promise.resolve(client.navigate(url, options)), { signal })
+  }
+
+  setActiveFrameContext(frameId, executionContextId) {
+    this.activeFrame = {
+      frameId: frameId || null,
+      contextId: executionContextId ?? null,
+    }
+  }
+
+  getActiveFrameContext() {
+    return { ...this.activeFrame }
+  }
+
+  clearActiveFrameContext() {
+    this.activeFrame = { frameId: null, contextId: null }
+  }
+
+  clearNavigationDerivedState() {
+    this.clearActiveFrameContext()
+    this.cdpState.isPaused = false
+    this.cdpState.currentCallFrames = []
+  }
+
+  clearPageDerivedState() {
+    this.page = null
+    this.cdpSession = null
+    this.clearActiveFrameContext()
+    this.cdpState.debuggerSession = null
+    this.cdpState.rawClient = null
+    this.cdpState.isPaused = false
+    this.cdpState.currentCallFrames = []
+    this.cdpState.activeBreakpoints = []
+    this.captures.consoleMessages = []
+    this.captures.consoleTracking = false
+    this.captures.consoleSession = null
+    this.captures.webSocketConnections = []
+    this.captures.webSocketMessages = []
+    this.captures.webSocketTracking = false
+    this.captures.webSocketSession = null
   }
 
   close(reason) {
