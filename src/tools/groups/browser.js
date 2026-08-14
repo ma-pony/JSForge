@@ -18,33 +18,33 @@ async function ensureConsoleTracking(runtime, cdp, signal) {
   }
 
   const initialization = (async () => {
-    await runtime.waitForOperation(cdp.send('Runtime.enable'), { signal })
-    if (captures.consoleSession !== cdp || captures.consoleInitializationPromise !== initialization) return
+    try {
+      await runtime.waitForOperation(cdp.send('Runtime.enable'))
+      if (captures.consoleSession !== cdp || captures.consoleInitializationPromise !== initialization) return
 
-    cdp.on('Runtime.consoleAPICalled', (params) => {
-      if (captures.consoleSession !== cdp) return
-      captures.consoleMessages.push({
-        type: params.type,
-        text: params.args?.map((arg) => arg.value ?? arg.description ?? '').join(' '),
-        timestamp: params.timestamp,
-        url: params.stackTrace?.callFrames?.[0]?.url,
-        line: params.stackTrace?.callFrames?.[0]?.lineNumber,
+      cdp.on('Runtime.consoleAPICalled', (params) => {
+        if (captures.consoleSession !== cdp) return
+        captures.consoleMessages.push({
+          type: params.type,
+          text: params.args?.map((arg) => arg.value ?? arg.description ?? '').join(' '),
+          timestamp: params.timestamp,
+          url: params.stackTrace?.callFrames?.[0]?.url,
+          line: params.stackTrace?.callFrames?.[0]?.lineNumber,
+        })
+        if (captures.consoleMessages.length > 500) captures.consoleMessages.shift()
       })
-      if (captures.consoleMessages.length > 500) captures.consoleMessages.shift()
-    })
-    captures.consoleTracking = true
+      captures.consoleTracking = true
+    } finally {
+      if (captures.consoleInitializationPromise === initialization) {
+        captures.consoleInitializationPromise = null
+        captures.consoleInitializationSession = null
+      }
+    }
   })()
 
   captures.consoleInitializationSession = cdp
   captures.consoleInitializationPromise = initialization
-  try {
-    await runtime.waitForOperation(initialization, { signal })
-  } finally {
-    if (captures.consoleInitializationPromise === initialization) {
-      captures.consoleInitializationPromise = null
-      captures.consoleInitializationSession = null
-    }
-  }
+  await runtime.waitForOperation(initialization, { signal })
 }
 
 export const tools = Object.freeze([

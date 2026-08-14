@@ -10,6 +10,12 @@ function throwIfAborted(signal) {
   if (signal?.aborted) throw abortError(signal.reason)
 }
 
+function combinedSignal(first, second) {
+  if (!first) return second
+  if (!second) return first
+  return globalThis.AbortSignal.any([first, second])
+}
+
 function waitFor(promise, { signal, timeout, timeoutMessage } = {}) {
   if (!signal && timeout == null) return promise
 
@@ -22,6 +28,11 @@ function waitFor(promise, { signal, timeout, timeoutMessage } = {}) {
       settle(value)
     }
 
+    promise.then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
+    )
+
     if (signal?.aborted) {
       reject(abortError(signal.reason))
       return
@@ -31,10 +42,6 @@ function waitFor(promise, { signal, timeout, timeoutMessage } = {}) {
     if (timeout != null) {
       timer = setTimeout(() => finish(reject, new Error(timeoutMessage)), timeout)
     }
-    promise.then(
-      (value) => finish(resolve, value),
-      (error) => finish(reject, error),
-    )
   })
 }
 
@@ -140,7 +147,10 @@ export class DeepSpiderRuntime {
   }
 
   waitForOperation(promise, options = {}) {
-    return waitFor(Promise.resolve(promise), options)
+    return waitFor(Promise.resolve(promise), {
+      ...options,
+      signal: combinedSignal(options.signal, this._lifetime.signal),
+    })
   }
 
   async cdpSend(method, params = {}, options = {}) {

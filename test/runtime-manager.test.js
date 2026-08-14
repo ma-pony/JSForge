@@ -111,6 +111,34 @@ test('DeepSpiderRuntime closes a lazily created browser only once', async () => 
   assert.equal(closes, 1)
 })
 
+test('already-aborted Runtime wait consumes a controlled promise that rejects later', async () => {
+  const runtime = new DeepSpiderRuntime({
+    sessionId: 'already-aborted-wait',
+    paths: { browserData: '/sessions/already-aborted-wait/browser-data' },
+    browserFactory: () => ({ launch: async () => {}, close: async () => {} }),
+    dataStoreFactory: () => ({ close: async () => {} }),
+  })
+  const operation = deferred()
+  const controller = new globalThis.AbortController()
+  const unhandled = []
+  const onUnhandled = (error) => unhandled.push(error)
+  process.on('unhandledRejection', onUnhandled)
+  controller.abort(new Error('already stopped'))
+
+  try {
+    await assert.rejects(
+      runtime.waitForOperation(operation.promise, { signal: controller.signal }),
+      /already stopped/,
+    )
+    operation.reject(new Error('late operation rejection'))
+    await setImmediate()
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+    await runtime.close()
+  }
+})
+
 test('RuntimeManager creates a Runtime lazily', async () => {
   let creations = 0
   const runtime = createRuntime('alpha')

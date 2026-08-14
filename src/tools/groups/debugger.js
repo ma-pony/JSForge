@@ -23,42 +23,42 @@ async function getSession(runtime, signal) {
   state.activeBreakpoints = []
 
   const initialization = (async () => {
-    const session = new CDPSession(rawClient)
-    await runtime.waitForOperation(session.enable(), { signal })
-    if (state.debuggerInitializationPromise !== initialization || runtime.cdpSession !== rawClient) {
-      throw new Error('CDP session changed during debugger initialization')
-    }
-
-    state.debuggerSession = session
-    state.rawClient = rawClient
-    session.on('Debugger.paused', (params) => {
-      if (state.debuggerSession !== session) return
-      const isBreakpoint = params.reason === 'breakpoint' || params.hitBreakpoints?.length > 0
-      if (isBreakpoint) {
-        state.isPaused = true
-        state.currentCallFrames = params.callFrames || []
-        const top = state.currentCallFrames[0]
-        console.error(`[debug] Breakpoint hit: ${top?.functionName || '(anonymous)'} @ ${top?.url?.split('/').pop() || '?'}:${top?.location?.lineNumber ?? '?'}`)
+    try {
+      const session = new CDPSession(rawClient)
+      await runtime.waitForOperation(session.enable())
+      if (state.debuggerInitializationPromise !== initialization || runtime.cdpSession !== rawClient) {
+        throw new Error('CDP session changed during debugger initialization')
       }
-    })
-    session.on('Debugger.resumed', () => {
-      if (state.debuggerSession !== session) return
-      state.isPaused = false
-      state.currentCallFrames = []
-    })
-    return session
+
+      state.debuggerSession = session
+      state.rawClient = rawClient
+      session.on('Debugger.paused', (params) => {
+        if (state.debuggerSession !== session) return
+        const isBreakpoint = params.reason === 'breakpoint' || params.hitBreakpoints?.length > 0
+        if (isBreakpoint) {
+          state.isPaused = true
+          state.currentCallFrames = params.callFrames || []
+          const top = state.currentCallFrames[0]
+          console.error(`[debug] Breakpoint hit: ${top?.functionName || '(anonymous)'} @ ${top?.url?.split('/').pop() || '?'}:${top?.location?.lineNumber ?? '?'}`)
+        }
+      })
+      session.on('Debugger.resumed', () => {
+        if (state.debuggerSession !== session) return
+        state.isPaused = false
+        state.currentCallFrames = []
+      })
+      return session
+    } finally {
+      if (state.debuggerInitializationPromise === initialization) {
+        state.debuggerInitializationPromise = null
+        state.debuggerInitializationSession = null
+      }
+    }
   })()
 
   state.debuggerInitializationSession = rawClient
   state.debuggerInitializationPromise = initialization
-  try {
-    return await runtime.waitForOperation(initialization, { signal })
-  } finally {
-    if (state.debuggerInitializationPromise === initialization) {
-      state.debuggerInitializationPromise = null
-      state.debuggerInitializationSession = null
-    }
-  }
+  return runtime.waitForOperation(initialization, { signal })
 }
 
 function checkPaused(state) {

@@ -15,48 +15,48 @@ async function ensureWebSocketTracking(runtime, cdp, signal) {
   }
 
   const initialization = (async () => {
-    await runtime.waitForOperation(cdp.send('Network.enable'), { signal })
-    if (captures.webSocketSession !== cdp || captures.webSocketInitializationPromise !== initialization) return
+    try {
+      await runtime.waitForOperation(cdp.send('Network.enable'))
+      if (captures.webSocketSession !== cdp || captures.webSocketInitializationPromise !== initialization) return
 
-    cdp.on('Network.webSocketCreated', (params) => {
-      if (captures.webSocketSession !== cdp) return
-      captures.webSocketConnections.push({
-        requestId: params.requestId,
-        url: params.url,
-        timestamp: Date.now(),
+      cdp.on('Network.webSocketCreated', (params) => {
+        if (captures.webSocketSession !== cdp) return
+        captures.webSocketConnections.push({
+          requestId: params.requestId,
+          url: params.url,
+          timestamp: Date.now(),
+        })
       })
-    })
-    cdp.on('Network.webSocketFrameReceived', (params) => {
-      if (captures.webSocketSession !== cdp) return
-      captures.webSocketMessages.push({
-        requestId: params.requestId,
-        direction: 'received',
-        data: params.response?.payloadData,
-        timestamp: Date.now(),
+      cdp.on('Network.webSocketFrameReceived', (params) => {
+        if (captures.webSocketSession !== cdp) return
+        captures.webSocketMessages.push({
+          requestId: params.requestId,
+          direction: 'received',
+          data: params.response?.payloadData,
+          timestamp: Date.now(),
+        })
       })
-    })
-    cdp.on('Network.webSocketFrameSent', (params) => {
-      if (captures.webSocketSession !== cdp) return
-      captures.webSocketMessages.push({
-        requestId: params.requestId,
-        direction: 'sent',
-        data: params.response?.payloadData,
-        timestamp: Date.now(),
+      cdp.on('Network.webSocketFrameSent', (params) => {
+        if (captures.webSocketSession !== cdp) return
+        captures.webSocketMessages.push({
+          requestId: params.requestId,
+          direction: 'sent',
+          data: params.response?.payloadData,
+          timestamp: Date.now(),
+        })
       })
-    })
-    captures.webSocketTracking = true
+      captures.webSocketTracking = true
+    } finally {
+      if (captures.webSocketInitializationPromise === initialization) {
+        captures.webSocketInitializationPromise = null
+        captures.webSocketInitializationSession = null
+      }
+    }
   })()
 
   captures.webSocketInitializationSession = cdp
   captures.webSocketInitializationPromise = initialization
-  try {
-    await runtime.waitForOperation(initialization, { signal })
-  } finally {
-    if (captures.webSocketInitializationPromise === initialization) {
-      captures.webSocketInitializationPromise = null
-      captures.webSocketInitializationSession = null
-    }
-  }
+  await runtime.waitForOperation(initialization, { signal })
 }
 
 function renderNetworkList(value) {

@@ -339,6 +339,66 @@ test('concurrent WebSocket setup shares one Runtime-local initializer and captur
   await manager.closeAll()
 })
 
+for (const scenario of [
+  {
+    label: 'console',
+    method: 'Runtime.enable',
+    group: browserTools,
+    tool: 'list_console_messages',
+    args: { level: 'all', limit: 50 },
+    listeners: ['Runtime.consoleAPICalled'],
+  },
+  {
+    label: 'WebSocket',
+    method: 'Network.enable',
+    group: networkTools,
+    tool: 'list_websockets',
+    args: {},
+    listeners: [
+      'Network.webSocketCreated',
+      'Network.webSocketFrameReceived',
+      'Network.webSocketFrameSent',
+    ],
+  },
+]) {
+  test(`${scenario.label} setup survives one canceled waiter without duplicating listeners`, async () => {
+    const enableGate = deferred()
+    let enableCalls = 0
+    const { manager, rawSessions } = createContextHarness({
+      send: async ({ method }) => {
+        if (method !== scenario.method) return
+        enableCalls += 1
+        await enableGate.promise
+      },
+    })
+    const sessionId = `${scenario.label.toLowerCase()}-cancel-waiter`
+    const context = mcpContextModule.createMcpContext({ sessionId, runtimeManager: manager })
+    const runtime = await context.getRuntime()
+    const canceledController = new globalThis.AbortController()
+    const canceled = execute(
+      scenario.group,
+      scenario.tool,
+      runtime,
+      scenario.args,
+      canceledController.signal,
+    )
+    await setImmediate()
+    const survivor = execute(scenario.group, scenario.tool, runtime, scenario.args)
+    await setImmediate()
+
+    canceledController.abort(new Error(`cancel ${scenario.label} waiter`))
+
+    await assert.rejects(canceled, new RegExp(`cancel ${scenario.label} waiter`))
+    enableGate.resolve()
+    await survivor
+
+    const cdp = rawSessions.get(sessionId)
+    assert.equal(enableCalls, 1)
+    for (const event of scenario.listeners) assert.equal(cdp.listenerCount(event), 1)
+    await manager.closeAll()
+  })
+}
+
 test('concurrent debugger setup shares one Runtime-local initializer and listener set', async () => {
   const enableGate = deferred()
   let enableCalls = 0
@@ -378,6 +438,51 @@ test('concurrent debugger setup shares one Runtime-local initializer and listene
   assert.equal(cdp.listenerCount('Debugger.resumed'), 1)
   assert.deepEqual(stack.stack.map(({ functionName }) => functionName), ['once'])
 
+  await manager.closeAll()
+})
+
+test('debugger initialization survives a canceled waiter and retry installs one listener set', async () => {
+  const enableGate = deferred()
+  let enableCalls = 0
+  const { manager, rawSessions } = createContextHarness({
+    send: async ({ method }) => {
+      if (method !== 'Debugger.enable') return
+      enableCalls += 1
+      await enableGate.promise
+    },
+  })
+  const context = mcpContextModule.createMcpContext({
+    sessionId: 'debugger-cancel-retry',
+    runtimeManager: manager,
+  })
+  const runtime = await context.getRuntime()
+  const canceledController = new globalThis.AbortController()
+  const canceled = execute(
+    debuggerTools,
+    'set_breakpoint',
+    runtime,
+    { url: 'https://cancel.test/app.js', line: 1, column: 0 },
+    canceledController.signal,
+  )
+  await setImmediate()
+
+  canceledController.abort(new Error('cancel debugger waiter'))
+
+  await assert.rejects(canceled, /cancel debugger waiter/)
+  const retry = execute(debuggerTools, 'set_breakpoint', runtime, {
+    url: 'https://retry.test/app.js',
+    line: 2,
+    column: 0,
+  })
+  await setImmediate()
+  enableGate.resolve()
+  await retry
+
+  const cdp = rawSessions.get('debugger-cancel-retry')
+  assert.equal(enableCalls, 1)
+  assert.equal(cdp.listenerCount('Debugger.scriptParsed'), 1)
+  assert.equal(cdp.listenerCount('Debugger.paused'), 1)
+  assert.equal(cdp.listenerCount('Debugger.resumed'), 1)
   await manager.closeAll()
 })
 
