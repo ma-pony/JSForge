@@ -8,7 +8,7 @@
 
 **必须满足，否则不得进入本阶段：**
 
-- [ ] `node entry.js`（含 env.js）已能产出与浏览器一致的加密结果
+- [ ] 不可变 bundle 的 `node runner.mjs --mode verify` 已能产出与浏览器一致的结果
 - [ ] runtime 阶段的 First Divergence 已消除
 - [ ] 至少有 3 组已知的浏览器 input→output 样本（用于后续验证）
 
@@ -47,20 +47,21 @@ const fixtures = [
 
 ### Step 2：Hook Local — 区分算法输入 vs 环境输入
 
-在 `entry.js` 中，用 `console.log` 标记每个加密函数的入参来源：
+通过浏览器 Hook、断点或 `probe.js` 标记加密函数的入参来源，不修改 `target.js`：
 
 ```javascript
-// entry.js 修改示例
-const rawData = buildInput();    // 来自业务逻辑（算法输入）
-const key = getKey();            // 来自环境（可能是硬编码或动态获取）
-const ts = Date.now();           // 来自环境（时间戳）
-
-console.log('[ALGO_INPUT]', JSON.stringify({ rawData, key, ts }));
-const result = encrypt(rawData, key, ts);
-console.log('[ALGO_OUTPUT]', result);
+inject_hook({
+  target: 'encrypt',
+  type: 'function',
+  script: `
+    const result = original(...args);
+    console.log('[ALGO_IO]', JSON.stringify({ args, result }));
+    return result;
+  `
+})
 ```
 
-运行后对比 `[ALGO_INPUT]` 的值与 `fixtures.json`，确认入参一致。
+将采样值与 `fixtures.json` 对比，确认入参一致；Probe 结论仍需 verify 复证。
 
 **目标**：明确哪些参数是"纯算法参数"（可跨语言移植），哪些是"环境参数"（需要在 Python 中同样获取）。
 
@@ -82,7 +83,7 @@ console.log('[ALGO_OUTPUT]', result);
  * @returns {string} 加密结果
  */
 function encrypt(data, key, timestamp) {
-  // 从 entry.js 中提取的纯算法代码
+  // 从不可变目标的已验证边界提取到新文件中的纯算法代码
   // 所有 window.xxx 替换为直接引用或函数参数
   // 所有 document.xxx 替换为函数参数
 }

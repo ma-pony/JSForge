@@ -132,7 +132,7 @@
 
 **正确做法**：
 1. 先运行 probe 并用 `analyze_runtime_trace` 找到最高优先级环境分歧
-2. 用 `collect_property(expr)` 从真实浏览器采集该 API 的真实值
+2. 用 `collect_property({ path })` 从真实浏览器采集该 API 的真实值
 3. 按真实值补丁，而非猜测
 
 **检测信号**：补丁文件中出现超过 5 个 `= {}` 或 `= () => {}`。
@@ -150,7 +150,7 @@
 
 **正确做法**：
 - 所有运行时状态值必须来自真实浏览器
-- 使用 `collect_property` 采集：`collect_property('navigator.userAgent')`
+- 使用 `collect_property` 采集：`collect_property({ path: 'navigator.userAgent' })`
 - 指纹类数据必须与真实会话一致，否则触发风控
 
 **检测信号**：补丁代码中有硬编码的 userAgent、cookie、canvas 字符串，且不是从采集工具获取的。

@@ -23,7 +23,7 @@ DeepSpider 将 OpenCode Agent、Patchright 浏览器和 Chrome DevTools Protocol
 - Patchright 是当前唯一浏览器底座，负责页面操作与反检测浏览器环境。
 - CDP 深度采集请求、响应、脚本、WebSocket、控制台、DOM、存储和调用栈。
 - 支持 Hook 注入、XHR 断点、源码文本断点、单步调试、变量求值和反调试开关。
-- 支持导出页面环境和补环境 bundle，用于在本地复现依赖浏览器对象的算法。
+- 支持导出绑定当前会话和脚本哈希的补环境 bundle，用于探测并复现浏览器环境依赖。
 
 ### 从分析到可交付代码
 
@@ -159,6 +159,21 @@ intake → evidence → locate → recover → runtime → extraction → valida
 
 DeepSpider 的证据门要求在分析前完成四件事：打开目标页面、执行触发操作、捕获真实请求、读取完整请求与响应。后续结论必须能回到这些证据，而不是从参数名称猜算法。
 
+### 补环境运行时
+
+目标脚本依赖浏览器环境时，先调用 `list_scripts` 获取当前捕获会话的精确 `scriptId`，再通过 `export_rebuild_bundle` 导出任务目录。`manifest.json` 记录会话 ID、脚本 ID 和 `target.js` 的 SHA-256；目标脚本字节发生变化时，Runner 会拒绝执行。
+
+```bash
+node ~/.deepspider/rebuild/<task-id>/runner.mjs --mode probe
+node ~/.deepspider/rebuild/<task-id>/runner.mjs --mode verify
+```
+
+- `probe` 注入观测 Hook，记录环境访问、源码完整性检查、Node 特征检测和动态代码，结果用于形成假设。
+- `verify` 不加载 Probe，只运行 `env.js`、原始 `target.js` 和入口表达式；通过该模式复现的结果才进入验证记录。
+- 补环境只修改 `env.js` 和 `probe.js`。`target.js` 与 `dynamic/` 中保存的动态源码保持原样。
+
+每次运行都会记录 session、script、target、captured environment、`env.js`、`probe.js` 和 Runner 身份。Probe 运行后可调用 `analyze_runtime_trace` 分析指定 run 的 `trace.ndjson`，再根据真实缺口调整环境实现。
+
 ## MCP 工具能力
 
 当前版本注册 51 个工具，分为八组：
@@ -171,7 +186,7 @@ DeepSpider 的证据门要求在分析前完成四件事：打开目标页面、
 | Debugger | 断点、调用栈、单步执行、变量求值、logpoint |
 | Hook | 注入 Hook、读取和搜索运行时采样数据 |
 | Capture | 收集环境对象及其属性 |
-| Rebuild | 导出补环境 bundle、比较环境依赖 |
+| Rebuild | 导出不可变目标 bundle、Probe/Verify 运行、Trace 分析 |
 | Stealth | 控制反调试拦截 |
 
 这些工具既可以由内置 Spider Agent 自动编排，也可以通过 MCP 客户端直接调用。
@@ -260,7 +275,7 @@ DeepSpider 不会自动加载项目根目录的 `.env`。持久化 profile 可�
 ├── data/sites/             # 按站点保存的请求、响应和脚本证据
 ├── store/                  # 本地知识与模式数据
 ├── output/                 # 报告、算法、截图和爬虫交付物
-├── rebuild/                # 补环境 bundle
+├── rebuild/                # 不可变目标 bundle、运行结果与 Trace
 └── browser-data/           # 可选的浏览器持久化数据
 ```
 

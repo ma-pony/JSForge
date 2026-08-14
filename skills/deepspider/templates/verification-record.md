@@ -7,7 +7,9 @@
 | Browser Session | `[填写]` |
 | Script ID | `[填写]` |
 | Target SHA-256 | `[填写]` |
-| Environment SHA-256 | `[填写]` |
+| Captured Environment SHA-256 | `[填写]` |
+| env.js SHA-256 | `[填写 result.envSha256]` |
+| runner SHA-256 | `[填写 result.runnerSha256]` |
 | Verify Run ID | `[填写]` |
 
 本地运行必须使用：

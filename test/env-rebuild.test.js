@@ -47,6 +47,18 @@ test('generated environment hides Node identity and cloaks browser API source', 
   assert.equal(vm.runInContext("atob('YWJj')", context), 'abc')
   assert.match(vm.runInContext('Function.prototype.toString.call(atob)', context), /\[native code\]/)
   assert.match(vm.runInContext('Function.prototype.toString.call(document.createElement)', context), /\[native code\]/)
+  assert.match(
+    vm.runInContext('Function.prototype.toString.call(Error.prepareStackTrace)', context),
+    /\[native code\]/,
+  )
+  assert.doesNotMatch(
+    vm.runInContext("try { null.missing } catch (error) { error.stack }", context),
+    /node:|internal\/|Script\.runInContext|env\.js/,
+  )
+  assert.doesNotMatch(
+    vm.runInContext("try { missingRuntimeName } catch (error) { error.stack }", context),
+    /node:|internal\/|Script\.runInContext|env\.js/,
+  )
 })
 
 test('property collection reports prototype ownership, brand and function source', async () => {

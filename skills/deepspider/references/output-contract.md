@@ -52,14 +52,14 @@
 ```json
 {
   "task_dir": "项目路径",
-  "iterations": [
-    {
-      "round": 1,
-      "error": "错误描述",
-      "patch": "补丁描述"
-    }
-  ],
-  "run_command": "node entry.js",
+  "session_id": "浏览器捕获会话",
+  "script_id": "精确脚本 ID",
+  "target_sha256": "目标源码哈希",
+  "env_sha256": "env.js 哈希",
+  "runner_sha256": "runner.mjs 哈希",
+  "probe_run": "Probe run ID",
+  "verify_run": "Verify run ID",
+  "run_command": "node runner.mjs --mode verify",
   "verified": true
 }
 ```
@@ -152,7 +152,7 @@ locate-complete        ← writer/builder/entry/source 四层定位完成
     ↓
 recover-complete       ← 加密逻辑或 bridging contract 提取完成
     ↓
-runtime-complete       ← Node.js entry.js 与浏览器输出一致
+runtime-complete       ← 不可变 bundle 的 verify 与浏览器输出一致
     ↓
 extraction-complete    ← pure-crypto.js 通过所有 fixture 验证
     ↓

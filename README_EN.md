@@ -23,7 +23,7 @@ DeepSpider combines an OpenCode Agent, a Patchright browser, and Chrome DevTools
 - Patchright is the sole browser foundation and provides page automation in an anti-detection browser environment.
 - Deep CDP integration captures requests, responses, scripts, WebSockets, console output, DOM state, storage, and call stacks.
 - Supports hook injection, XHR and source-text breakpoints, stepping, variable evaluation, and anti-debug controls.
-- Exports browser state and environment-rebuild bundles for reproducing algorithms that depend on browser objects.
+- Exports environment-rebuild bundles bound to the current capture session and script hash for probing and reproducing browser dependencies.
 
 ### From analysis to runnable delivery
 
@@ -160,6 +160,21 @@ intake → evidence → locate → recover → runtime → extraction → valida
 
 DeepSpider's evidence gate requires four steps before analysis: open the target page, perform the trigger action, capture the real request, and inspect the complete request and response. Every later conclusion must trace back to this evidence rather than guessing an algorithm from a parameter name.
 
+### Environment-rebuild runtime
+
+When a target script depends on browser state, call `list_scripts` to get the exact `scriptId` from the current capture session, then export a task directory with `export_rebuild_bundle`. Its `manifest.json` records the session ID, script ID, and SHA-256 of `target.js`. The Runner rejects execution if the target bytes change.
+
+```bash
+node ~/.deepspider/rebuild/<task-id>/runner.mjs --mode probe
+node ~/.deepspider/rebuild/<task-id>/runner.mjs --mode verify
+```
+
+- `probe` installs observation hooks and records environment access, source-integrity checks, Node fingerprint checks, and dynamic code. Its output is used to form hypotheses.
+- `verify` loads no Probe. It runs only `env.js`, the original `target.js`, and the entry expression. Only results reproduced in this mode enter the verification record.
+- Environment work changes `env.js` and `probe.js` only. `target.js` and the dynamic sources stored under `dynamic/` remain unchanged.
+
+Each run records the session, script, target, captured environment, `env.js`, `probe.js`, and Runner identities. After a Probe run, call `analyze_runtime_trace` for that run's `trace.ndjson`, then adjust the environment from the observed gap.
+
 ## MCP capabilities
 
 The current release registers 51 tools in eight groups:
@@ -172,7 +187,7 @@ The current release registers 51 tools in eight groups:
 | Debugger | Breakpoints, call stacks, stepping, variable evaluation, logpoints |
 | Hook | Hook injection plus reading and searching runtime samples |
 | Capture | Browser environment and property collection |
-| Rebuild | Environment-bundle export and dependency comparison |
+| Rebuild | Immutable-target bundle export, Probe/Verify runs, and Trace analysis |
 | Stealth | Anti-debug interception control |
 
 The bundled Spider Agent can orchestrate these tools automatically, or an MCP client can call them directly.
@@ -261,7 +276,7 @@ Main data is stored under `~/.deepspider/`:
 ├── data/sites/             # Per-site request, response, and script evidence
 ├── store/                  # Local knowledge and pattern data
 ├── output/                 # Reports, algorithms, screenshots, and crawler deliverables
-├── rebuild/                # Environment-rebuild bundles
+├── rebuild/                # Immutable-target bundles, run results, and traces
 └── browser-data/           # Optional persistent browser data
 ```
 

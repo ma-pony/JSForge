@@ -113,96 +113,32 @@ collect_env()
 - WebGL 参数
 - `Date.getTimezoneOffset()`
 
-**通常缺少的属性**（需要 `collect_property` 补充）：
+**通常缺少的属性**（按 trace 路径使用 `collect_property` 补充）：
 
 ```javascript
-// AudioContext 指纹（compute-heavy，collect_env 不默认采集）
-collect_property({
-  expression: `
-    (async () => {
-      const ctx = new OfflineAudioContext(1, 44100, 44100);
-      const osc = ctx.createOscillator();
-      osc.type = 'triangle';
-      osc.frequency.value = 10000;
-      osc.connect(ctx.destination);
-      osc.start(0);
-      const buf = await ctx.startRendering();
-      const data = buf.getChannelData(0);
-      return Array.from(data.slice(0, 32));
-    })()
-  `
-})
-
-// WebGL 扩展列表（有些扩展在补环境中需要精确匹配）
-collect_property({
-  expression: `
-    const gl = document.createElement('canvas').getContext('webgl');
-    gl.getSupportedExtensions()
-  `
-})
-
-// plugins 详情（名称、filename）
-collect_property({
-  expression: `
-    Array.from(navigator.plugins).map(p => ({
-      name: p.name,
-      filename: p.filename,
-      description: p.description
-    }))
-  `
-})
+collect_property({ path: 'navigator.plugins', depth: 3 })
+collect_property({ path: 'navigator.hardwareConcurrency' })
+collect_property({ path: 'screen.width' })
+collect_property({ path: 'screen.height' })
 ```
 
 ---
 
 ## 补环境拟合策略
 
-### 原则：不伪造值，用真实浏览器数据
+目标源码、动态源码、常量池和控制流必须保持原始字节不变。环境值从真实浏览器采集，修复仅写入 `env.js` 或 `probe.js`。
 
-瑞数会在服务端和 Cookie 本身对环境值做交叉验证。伪造值的风险：
-- Canvas 指纹如果是 `node-canvas` 渲染的，像素值与真实浏览器不同
-- WebGL renderer 字符串必须与真实 GPU 驱动一致
-- AudioContext 指纹对 DSP 精度敏感
-
-**正确流程**：
-
-```
-1. collect_env → 获取真实浏览器的完整环境快照
-2. export_rebuild_bundle → 生成包含真实环境数据的 Node.js 项目
-3. 在 Node.js 中 require rebuild bundle，用真实值填充 basearr
-4. 执行瑞数 JS（去掉浏览器 API 依赖后），生成 Cookie
+```text
+list_scripts
+→ export_rebuild_bundle({ taskId, scriptId, callExpression })
+→ node runner.mjs --mode probe
+→ analyze_runtime_trace({ taskId, runId })
+→ collect_property({ path })
+→ 修改 env.js / probe.js
+→ node runner.mjs --mode verify
 ```
 
-### 步骤一：真实浏览器环境采集
-
-```javascript
-// 在目标网站上执行（确保环境一致）
-collect_env()
-
-// 对于 RS 高度敏感的属性，单独精确采集
-collect_property({ expression: "navigator.plugins.length" })
-collect_property({ expression: "screen.width + 'x' + screen.height" })
-collect_property({ expression: "navigator.hardwareConcurrency" })
-```
-
-### 步骤二：检查 diff（真实 vs 当前补环境）
-
-```javascript
-// 对比真实采集值与当前补环境代码的差异
-diff_env_requirements({
-  envSnapshot: "path/to/env.json",
-  rebuildBundle: "path/to/rebuild/index.js"
-})
-```
-
-### 步骤三：导出补环境 bundle
-
-```javascript
-export_rebuild_bundle({
-  outputDir: "~/.deepspider/output/rs-rebuild/",
-  includeEnvData: true  // 包含 collect_env 采集的真实数据
-})
-```
+`probe` 用于形成假设，不能作为验证通过依据。只有 sessionId、scriptId、target、env.js 和 runner 哈希一致的 `verify` 结果才能进入 Proven Facts。
 
 ---
 
@@ -287,9 +223,9 @@ const nodeCookie = "TS01a2b3c4=yyy...";
 | 工具 | 运行时阶段用途 |
 |------|-------------|
 | `collect_env` | 采集真实浏览器完整环境快照 |
-| `collect_property` | 精确采集 RS 敏感属性（Canvas、WebGL、Audio） |
-| `diff_env_requirements` | 对比补环境差异，找到缺失项 |
-| `export_rebuild_bundle` | 生成可在 Node.js 中运行的补环境项目 |
+| `collect_property` | 精确采集 trace 中出现的浏览器属性 |
+| `analyze_runtime_trace` | 对 probe trace 的首次分歧进行分类 |
+| `export_rebuild_bundle` | 按当前会话和精确脚本导出不可变目标 bundle |
 | `set_breakpoint_on_text` | 定位 basearr 赋值行，建立槽位映射 |
 | `evaluate_on_callframe` | 断点时检查 basearr 当前状态 |
 | `get_storage` | 获取真实浏览器 Cookie 用于对比验证 |

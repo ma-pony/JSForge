@@ -55,9 +55,38 @@ test('runtime templates record challenge identity and evidence level', () => {
   assert.match(sessionState, /Script ID/)
   assert.match(sessionState, /Target SHA-256/)
   assert.match(sessionState, /Runtime Evidence/)
+  assert.match(sessionState, /env\.js SHA-256/)
+  assert.match(sessionState, /runner SHA-256/)
   for (const level of ['Observed', 'Hypothesis', 'Verified', 'Invalid']) {
     assert.match(sessionState, new RegExp(level))
   }
   assert.match(verification, /--mode verify/)
   assert.match(verification, /Target SHA-256/)
+  assert.match(verification, /env\.js SHA-256/)
+  assert.match(verification, /runner SHA-256/)
+})
+
+test('all loadable runtime guidance uses the immutable probe and verify contract', () => {
+  const skill = read('skills/deepspider/SKILL.md')
+  const rsRuntime = read('skills/deepspider/references/rs-guide/rs-runtime.md')
+  const fallbacks = read('skills/deepspider/references/fallbacks.md')
+
+  assert.doesNotMatch(skill, /runtime[^\n]*rs-guide\//)
+  assert.doesNotMatch(rsRuntime, /diff_env_requirements|includeEnvData|outputDir:|require rebuild bundle/)
+  assert.match(rsRuntime, /--mode probe/)
+  assert.match(rsRuntime, /--mode verify/)
+  assert.doesNotMatch(fallbacks, /diff_env_requirements|bypass/)
+
+  const relatedGuidance = [
+    read('skills/deepspider/references/anti-patterns.md'),
+    read('skills/deepspider/references/recover-strategy.md'),
+    read('skills/deepspider/references/wasm-worker-webpack.md'),
+    read('skills/deepspider/references/extraction-protocol.md'),
+    read('skills/deepspider/references/output-contract.md'),
+    rsRuntime,
+  ].join('\n')
+  assert.doesNotMatch(
+    relatedGuidance,
+    /includeWasm|collect_property\(\s*['"]|collect_property\(\s*\{\s*expression|node entry\.js|Node\.js entry\.js/,
+  )
 })

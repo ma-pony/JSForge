@@ -40,8 +40,15 @@ export function buildProbeCode() {
     const handler = {
       get(target, property, receiver) {
         const childPath = path + '.' + String(property);
-        emit({ category: 'environment-access', operation: 'get', path: childPath, stack: stack() });
-        return membrane(Reflect.get(target, property, receiver), childPath);
+        const result = Reflect.get(target, property, receiver);
+        emit({
+          category: result === undefined ? 'environment-missing' : 'environment-access',
+          operation: 'get',
+          path: childPath,
+          valueType: typeof result,
+          stack: stack(),
+        });
+        return membrane(result, childPath);
       },
       has(target, property) {
         emit({ category: 'environment-access', operation: 'has', path: path + '.' + String(property), stack: stack() });
@@ -89,7 +96,12 @@ export function buildProbeCode() {
 `.trimStart()
 }
 
-export function buildRunnerCode() {
+export function buildRunnerCode(options = {}) {
+  const timeoutMs = options?.timeoutMs ?? 10_000
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new TypeError('buildRunnerCode: timeoutMs must be a positive integer')
+  }
+
   return `
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -99,10 +111,13 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const taskDir = path.dirname(fileURLToPath(import.meta.url));
+const runtimeTimeoutMs = ${timeoutMs};
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
+
+const runnerSha256 = sha256(fs.readFileSync(fileURLToPath(import.meta.url)));
 
 function runtimeError(code, message) {
   const error = new Error(message);
@@ -129,6 +144,20 @@ function post(session, method, params = {}) {
   });
 }
 
+async function awaitWithTimeout(value) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve(value),
+      new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(runtimeError('E_RUNTIME_TIMEOUT', 'Entry result did not settle before the runtime timeout')), runtimeTimeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function run() {
   const mode = readMode(process.argv.slice(2));
   const manifest = JSON.parse(fs.readFileSync(path.join(taskDir, 'manifest.json'), 'utf8'));
@@ -147,13 +176,35 @@ async function run() {
   const runDir = path.join(taskDir, 'runs', runId);
   fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
   const trace = [];
+  const traceByKey = new Map();
+  let envSha256 = null;
+  let probeSha256 = null;
   const emit = (event) => {
-    trace.push({
-      seq: trace.length + 1,
-      targetSha256: manifest.targetSha256,
-      envSha256: manifest.environmentSha256,
+    const caller = event.caller || String(event.stack || '')
+      .split('\\n')
+      .slice(1)
+      .find((line) => !/probe\\.js|env\\.js/.test(line)) || '';
+    const key = JSON.stringify([event.category, event.operation, event.path, caller]);
+    const existing = traceByKey.get(key);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+    const entry = {
       ...event,
-    });
+      seq: trace.length + 1,
+      count: 1,
+      caller,
+      sessionId: manifest.sessionId,
+      scriptId: manifest.scriptId,
+      targetSha256: manifest.targetSha256,
+      environmentSha256: manifest.environmentSha256,
+      envSha256,
+      probeSha256,
+      runnerSha256,
+    };
+    trace.push(entry);
+    traceByKey.set(key, entry);
   };
 
   let output = null;
@@ -184,11 +235,13 @@ async function run() {
     }
     const context = vm.createContext(sandbox, { name: 'DeepSpiderRebuild' });
     const envCode = fs.readFileSync(path.join(taskDir, 'env.js'), 'utf8');
-    new vm.Script(envCode, { filename: 'env.js' }).runInContext(context, { timeout: 10_000 });
+    envSha256 = sha256(envCode);
+    new vm.Script(envCode, { filename: 'env.js' }).runInContext(context, { timeout: runtimeTimeoutMs });
 
     if (mode === 'probe') {
       const probeCode = fs.readFileSync(path.join(taskDir, 'probe.js'), 'utf8');
-      new vm.Script(probeCode, { filename: 'probe.js' }).runInContext(context, { timeout: 10_000 });
+      probeSha256 = sha256(probeCode);
+      new vm.Script(probeCode, { filename: 'probe.js' }).runInContext(context, { timeout: runtimeTimeoutMs });
 
       inspectorSession = new inspector.Session();
       inspectorSession.connect();
@@ -203,27 +256,44 @@ async function run() {
             const dynamicDir = path.join(taskDir, 'dynamic');
             fs.mkdirSync(dynamicDir, { recursive: true, mode: 0o700 });
             const dynamicFile = path.join(dynamicDir, hash + '.js');
-            if (!fs.existsSync(dynamicFile)) fs.writeFileSync(dynamicFile, scriptSource, { mode: 0o600 });
+            if (fs.existsSync(dynamicFile)) {
+              const existingSource = fs.readFileSync(dynamicFile);
+              if (sha256(existingSource) !== hash) {
+                throw runtimeError('E_DYNAMIC_INTEGRITY', 'Existing dynamic source does not match its content hash');
+              }
+            } else {
+              fs.writeFileSync(dynamicFile, scriptSource, { mode: 0o600 });
+            }
             emit({ category: 'dynamic-code', operation: 'scriptParsed', path: url || hash, sha256: hash, bytes: Buffer.byteLength(scriptSource) });
-          })
-          .catch(() => {});
+          });
         dynamicPending.push(pending);
       });
     }
 
     captureDynamic = true;
     new vm.Script(targetSource.toString('utf8'), { filename: 'target.js' })
-      .runInContext(context, { timeout: 10_000 });
+      .runInContext(context, { timeout: runtimeTimeoutMs });
     const rawOutput = new vm.Script(manifest.callExpression || 'undefined', { filename: 'entry.js' })
-      .runInContext(context, { timeout: 10_000 });
-    output = await rawOutput;
+      .runInContext(context, { timeout: runtimeTimeoutMs });
+    output = await awaitWithTimeout(rawOutput);
     if (inspectorSession) {
       await new Promise((resolve) => setImmediate(resolve));
-      await Promise.allSettled(dynamicPending);
+      const dynamicResults = await Promise.allSettled(dynamicPending);
+      const rejected = dynamicResults.find((result) => result.status === 'rejected');
+      if (rejected) throw rejected.reason;
     }
     return output;
   } catch (error) {
     failure = error;
+    const category = ['E_RUNTIME_TIMEOUT', 'ERR_SCRIPT_EXECUTION_TIMEOUT'].includes(error.code)
+      ? 'runtime-timeout'
+      : 'runtime-exception';
+    emit({
+      category,
+      operation: 'throw',
+      path: 'runtime',
+      error: { code: error.code || 'E_RUNTIME', message: error.message },
+    });
     throw error;
   } finally {
     if (inspectorSession) inspectorSession.disconnect();
@@ -232,8 +302,13 @@ async function run() {
       runId,
       mode,
       status: failure ? 'error' : 'success',
+      sessionId: manifest.sessionId,
+      scriptId: manifest.scriptId,
       targetSha256: manifest.targetSha256,
-      envSha256: manifest.environmentSha256,
+      environmentSha256: manifest.environmentSha256,
+      envSha256,
+      probeSha256,
+      runnerSha256,
       output,
       error: failure ? { code: failure.code || 'E_RUNTIME', message: failure.message } : null,
       startedAt,

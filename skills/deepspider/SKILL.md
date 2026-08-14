@@ -107,7 +107,7 @@ intake → evidence → locate → recover → runtime → extraction → valida
 | evidence | — | — | — |
 | locate | `locate-workflow.md` | `crypto-patterns.md`, `hook-and-boundary.md` | `jsvmp-and-ast.md` |
 | recover | `recover-strategy.md` | `crypto-patterns.md`, `anti-debug-and-risk.md` | `jsvmp-and-ast.md`, `wasm-worker-webpack.md` |
-| runtime | `runtime-diagnosis.md` | `env-patching.md`, `anti-patterns.md` | `rs-guide/` 目录 |
+| runtime | `runtime-diagnosis.md` | `env-patching.md`, `anti-patterns.md` | — |
 | extraction | `extraction-protocol.md` | `crypto-patterns.md` | — |
 | validation | `output-contract.md` | `algorithm-upgrade.md` | — |
 | handoff | `crawler-template.md` | `anti-bot.md` | `protocol-and-ws.md` |

@@ -28,6 +28,10 @@ test('manifest declares the Node floor required by the tested project graph', ()
   assert.equal(root.engines.node, '>=20.19.0')
 })
 
+test('published package includes the bilingual project readme', () => {
+  assert.ok(root.files.includes('README_EN.md'))
+})
+
 test('publish jobs use the Node floor and frozen script-free installs', () => {
   const workflow = fs.readFileSync(
     new URL('../.github/workflows/publish.yml', import.meta.url),

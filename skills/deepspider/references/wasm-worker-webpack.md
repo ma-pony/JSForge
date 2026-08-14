@@ -72,14 +72,11 @@ inject_hook({
 })
 ```
 
-### 步骤三：Bridge 方案 — 导出补环境包
+### 步骤三：Bridge 方案 — 固定加载器与 WASM 身份
 
 如果加密逻辑在 WASM 内部，且需要在 Node.js 中复现：
 
-```javascript
-// 导出包含 .wasm 文件的补环境 bundle
-export_rebuild_bundle({ includeWasm: true })
-```
+先从 `list_scripts` 取得当前会话的加载器 `scriptId`，再调用 `export_rebuild_bundle({ taskId, scriptId, callExpression })`。WASM 响应通过网络证据单独保存并记录 SHA-256，不写入或改写目标脚本。
 
 在 Node.js 中直接加载 WASM 文件，使用相同 imports 调用：
 
@@ -260,6 +257,6 @@ inject_hook({
 | `inject_preload_script` | Worker 创建前注入、Webpack require 前拦截 |
 | `inject_hook` | Hook WASM instantiate、postMessage、__webpack_require__ |
 | `find_in_script` | 定位 .wasm 请求、Worker URL、模块 ID |
-| `export_rebuild_bundle` | 打包含 WASM 文件的补环境包 |
+| `export_rebuild_bundle` | 按当前会话导出不可变的 JS 加载器 bundle |
 | `evaluate_script` | 直接调用 __webpack_require__(moduleId) |
 | `list_network_requests` | 找 .wasm 文件下载 URL |

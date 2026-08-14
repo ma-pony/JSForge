@@ -10,6 +10,7 @@
     "agents/",
     "plugins/",
     "skills/",
+    "README_EN.md",
     "requirements-crypto.txt",
     ".env.example"
   ],

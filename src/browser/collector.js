@@ -3,6 +3,131 @@
  * 从真实浏览器动态采集任意环境属性
  */
 
+export function collectPropertyInRealm({ path, depth }) {
+  const seen = new WeakSet();
+
+  function getByPath(obj, propertyPath) {
+    return propertyPath.split('.').reduce((value, key) => value && value[key], obj);
+  }
+
+  function getPrototypeFacts(value) {
+    if (value === null || value === undefined) {
+      return { brand: Object.prototype.toString.call(value), constructorName: null, prototypeChain: [] };
+    }
+    const boxed = Object(value);
+    const prototypeChain = [];
+    let prototype = Object.getPrototypeOf(boxed);
+    while (prototype && prototypeChain.length < 8) {
+      const name = prototype.constructor?.name;
+      if (name && prototypeChain[prototypeChain.length - 1] !== name) prototypeChain.push(name);
+      prototype = Object.getPrototypeOf(prototype);
+    }
+    return {
+      brand: Object.prototype.toString.call(value),
+      constructorName: boxed.constructor?.name || null,
+      prototypeChain,
+    };
+  }
+
+  function serialize(value, currentDepth, maxDepth) {
+    if (value === null) return { type: 'null', value: null };
+    if (value === undefined) return { type: 'undefined', value: undefined };
+
+    const type = typeof value;
+    if (type === 'function') return { type: 'function', name: value.name || 'anonymous' };
+    if (type !== 'object') return { type, value };
+    if (seen.has(value)) return { type: 'object', value: '[Circular]', circular: true };
+    if (currentDepth >= maxDepth) return { type: 'object', value: '[Object]', truncated: true };
+
+    seen.add(value);
+    if (Array.isArray(value)) {
+      return {
+        type: 'array',
+        length: value.length,
+        value: value.slice(0, 20).map((entry) => serialize(entry, currentDepth + 1, maxDepth)),
+      };
+    }
+
+    const result = { type: 'object', properties: {} };
+    let keys;
+    try {
+      keys = Object.getOwnPropertyNames(value);
+    } catch (error) {
+      return { type: 'object', value: '[Error accessing keys]', error: error.message };
+    }
+
+    for (const key of keys.slice(0, 30)) {
+      try {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor) continue;
+        if (descriptor.get) {
+          result.properties[key] = {
+            type: 'getter',
+            hasGetter: true,
+            enumerable: descriptor.enumerable,
+            configurable: descriptor.configurable,
+          };
+        } else if (descriptor.set && descriptor.value === undefined) {
+          result.properties[key] = { type: 'setter', hasSetter: true };
+        } else {
+          result.properties[key] = serialize(descriptor.value, currentDepth + 1, maxDepth);
+        }
+      } catch (error) {
+        result.properties[key] = { type: 'error', message: error.message };
+      }
+    }
+    return result;
+  }
+
+  try {
+    const value = getByPath(window, path);
+    if (value === undefined) return { success: false, error: `${path} is undefined` };
+
+    const parts = path.split('.');
+    const propertyName = parts.pop();
+    const parentPath = parts.join('.');
+    const parent = parentPath ? getByPath(window, parentPath) : window;
+    let descriptor = null;
+    let ownerDepth = null;
+    if (parent) {
+      try {
+        let owner = parent;
+        let depthFromParent = 0;
+        while (owner && depthFromParent < 8) {
+          const currentDescriptor = Object.getOwnPropertyDescriptor(owner, propertyName);
+          if (currentDescriptor) {
+            descriptor = {
+              configurable: currentDescriptor.configurable,
+              enumerable: currentDescriptor.enumerable,
+              writable: currentDescriptor.writable,
+              hasGetter: !!currentDescriptor.get,
+              hasSetter: !!currentDescriptor.set,
+            };
+            ownerDepth = depthFromParent;
+            break;
+          }
+          owner = Object.getPrototypeOf(owner);
+          depthFromParent++;
+        }
+      } catch {
+        // Descriptor facts remain null when the browser rejects introspection.
+      }
+    }
+
+    return {
+      success: true,
+      path,
+      data: serialize(value, 0, depth),
+      descriptor,
+      ownerDepth,
+      ...getPrototypeFacts(value),
+      functionSource: typeof value === 'function' ? Function.prototype.toString.call(value) : null,
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
 export class EnvCollector {
   constructor(page) {
     this.page = page;

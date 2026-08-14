@@ -22,7 +22,7 @@ contract = {
 只要契约成立，Python 可以通过以下方式复现：
 1. 直接调用标准库（已知算法）
 2. 调用 Node.js 子进程执行原始 JS（无法逆向时）
-3. 调用补环境 entry.js（VM 保护时）
+3. 调用已验证的独立 Node.js Bridge（VM 保护时）
 
 ---
 
@@ -124,13 +124,17 @@ evaluate_on_callframe("_0x3c4d.length") // 如果是字符串/数组
 2. 用 `inject_hook` 包装 VM 的 dispatch 函数（通常是最外层调用的那个函数）
 3. 收集足够多的 I/O 样本（至少 20 组）
 4. 分析样本规律，确定算法类型
-5. 如果无法从样本推断算法，使用 `export_rebuild_bundle` 导出补环境项目：
+5. 如果无法从样本推断算法，使用当前会话的精确脚本导出不可变 bundle：
 
 ```
-export_rebuild_bundle()   → 生成 ~/.deepspider/output/{task}/entry.js + env.js
+list_scripts
+→ export_rebuild_bundle({ taskId, scriptId, callExpression })
+→ node runner.mjs --mode probe
+→ analyze_runtime_trace({ taskId, runId })
+→ node runner.mjs --mode verify
 ```
 
-6. 在 Node.js 中直接调用 VM 函数（不逆向内部逻辑）
+6. verify 通过后再进入 extraction，生成独立调用层；bundle 内的 target.js 和动态源码始终不改
 
 ---
 
@@ -166,38 +170,9 @@ export_rebuild_bundle()   → 生成 ~/.deepspider/output/{task}/entry.js + env.
 
 ---
 
-## Python 调用 Node.js 的 Bridge 模板
+## Python 调用 Node.js 的 Bridge
 
-当无法完全逆向时，Python 通过子进程调用原始 JS：
-
-```python
-import subprocess
-import json
-
-def encrypt_via_js(data: str, key: str) -> str:
-    """通过 Node.js 子进程调用原始加密函数"""
-    payload = json.dumps({"data": data, "key": key})
-    result = subprocess.run(
-        ["node", "/path/to/entry.js"],
-        input=payload,
-        capture_output=True,
-        text=True,
-        timeout=5
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"JS bridge error: {result.stderr}")
-    return json.loads(result.stdout)["result"]
-```
-
-对应的 `entry.js`（由 `export_rebuild_bundle` 生成后修改）：
-
-```javascript
-// entry.js bridge mode
-require('./env.js');  // 加载补环境
-const input = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
-const result = encrypt(input.data, input.key);
-process.stdout.write(JSON.stringify({ result }));
-```
+需要 Node Bridge 时，先用 bundle 的 verify 模式完成多样本验证。随后在 extraction 目录创建独立调用层，通过 stdin/stdout 接收输入；调用层引用已验证算法合约，不覆盖 rebuild 目录，也不修改 `target.js`、动态源码、常量池或控制流。
 
 ---
 
@@ -207,7 +182,7 @@ process.stdout.write(JSON.stringify({ result }));
 
 - [ ] **Full Reverse**：已识别算法类型，Python 可用标准库直接实现
 - [ ] **Hook Bridge**：已收集 ≥5 组 I/O 样本，算法契约已记录
-- [ ] **VM Bridge**：`export_rebuild_bundle` 已生成，Node.js entry.js 可在 shell 中运行并产出正确结果
+- [ ] **VM Bridge**：不可变 bundle 的 verify 已通过，独立调用层可在 shell 中运行并产出正确结果
 
 并且：
 - [ ] 加密函数的 key_source（密钥来源）已明确

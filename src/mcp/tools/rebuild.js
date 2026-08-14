@@ -75,6 +75,11 @@ export function registerRebuildTools(server, dependencies = {}) {
         const sessionId = store.getSessionId()
         const currentScripts = await store.getScriptList(null, true)
         const script = selectCurrentSessionScript(currentScripts, scriptId, sessionId)
+        if (script.truncated) {
+          const error = new Error(`Script "${scriptId}" was truncated during capture and cannot be used as an immutable target`)
+          error.code = 'E_SCRIPT_TRUNCATED'
+          throw error
+        }
         const targetSource = await store.getScript(script.site, script.id)
         if (typeof targetSource !== 'string' || targetSource.length === 0) {
           return jsonResult({ error: `Script "${scriptId}" source is empty` }, true)

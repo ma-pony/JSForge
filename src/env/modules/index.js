@@ -100,6 +100,38 @@ function baseEnvCode() {
     globalThis.parent = globalThis;
     globalThis.atob = __markNative(__atob, 'atob');
     globalThis.btoa = __markNative(__btoa, 'btoa');
+
+    const __hostError = globalThis.Error;
+    const __formatBrowserStack = __markNative(function prepareStackTrace(error, frames) {
+      let header = 'Error';
+      try { header = __hostError.prototype.toString.call(error); } catch {}
+      const visibleFrames = frames.filter((frame) => {
+        let file = '';
+        try { file = String(frame.getFileName() || frame.getScriptNameOrSourceURL() || ''); } catch {}
+        return !/node:|internal\\/|runner\\.mjs|env\\.js/.test(file);
+      });
+      return header + visibleFrames.map((frame) => '\\n    at ' + String(frame)).join('');
+    }, 'prepareStackTrace');
+    Object.defineProperty(__hostError, 'prepareStackTrace', {
+      value: __formatBrowserStack,
+      configurable: true,
+      writable: true,
+    });
+
+    const __browserErrorTarget = function Error() {
+      const nextTarget = new.target && new.target !== __browserError ? new.target : __hostError;
+      const error = Reflect.construct(__hostError, arguments, nextTarget);
+      return error;
+    };
+    Object.setPrototypeOf(__browserErrorTarget, __hostError);
+    Object.defineProperty(__browserErrorTarget, 'prototype', { value: __hostError.prototype });
+    const __browserError = __markNative(__browserErrorTarget, 'Error');
+    Object.defineProperty(__hostError.prototype, 'constructor', {
+      value: __browserError,
+      configurable: true,
+      writable: true,
+    });
+    globalThis.Error = __browserError;
   `;
 }
 
@@ -124,6 +156,36 @@ export function buildEnvCode(pageData) {
   ];
   return `(function buildDeepSpiderEnvironment() {
 ${parts.join('\n\n')}
+
+  function __installBrowserInterface(name, values) {
+    const BrowserInterface = __markNative(function() {}, name);
+    const prototype = {};
+    Object.defineProperty(prototype, 'constructor', {
+      value: BrowserInterface,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(prototype, Symbol.toStringTag, {
+      value: name,
+      configurable: true,
+    });
+    Object.defineProperty(BrowserInterface, 'prototype', { value: prototype });
+    for (const value of values) {
+      if (value && typeof value === 'object') Object.setPrototypeOf(value, prototype);
+    }
+    Object.defineProperty(globalThis, name, {
+      value: BrowserInterface,
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  __installBrowserInterface('Document', [globalThis.document]);
+  __installBrowserInterface('Navigator', [globalThis.navigator]);
+  __installBrowserInterface('Location', [globalThis.location]);
+  __installBrowserInterface('Screen', [globalThis.screen]);
+  __installBrowserInterface('History', [globalThis.history]);
+  __installBrowserInterface('Storage', [globalThis.localStorage, globalThis.sessionStorage]);
 
   function __cloakObject(object, depth, seen = new WeakSet()) {
     if ((typeof object !== 'object' && typeof object !== 'function') || object === null || seen.has(object)) return;

@@ -120,3 +120,33 @@ test('analyzes a stored probe trace without permitting target modification', asy
   assert.equal(data.category, 'source-integrity')
   assert.equal(data.targetModificationAllowed, false)
 })
+
+test('rejects a truncated capture instead of signing partial bytes as the target', async () => {
+  const rebuildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-truncated-'))
+  const server = fakeServer()
+  registerRebuildTools(server, {
+    rebuildDir,
+    getStore: () => ({
+      getSessionId: () => 'session-current',
+      getScriptList: async () => [{
+        id: 'script-truncated',
+        site: 'example.com',
+        sessionId: 'session-current',
+        truncated: true,
+      }],
+      getScript: async () => 'partial source',
+    }),
+    getPageUrl: async () => 'https://example.com/',
+    collectPageData: async () => ({}),
+    buildEnvironment: () => '',
+  })
+
+  const result = await server.tools.get('export_rebuild_bundle').handler({
+    taskId: 'truncated-task',
+    scriptId: 'script-truncated',
+  })
+
+  assert.equal(result.isError, true)
+  assert.equal(textResult(result).code, 'E_SCRIPT_TRUNCATED')
+  assert.equal(fs.existsSync(path.join(rebuildDir, 'truncated-task')), false)
+})

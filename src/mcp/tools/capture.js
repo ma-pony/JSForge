@@ -4,16 +4,20 @@
 
 import { z } from 'zod';
 import { getPage, getActiveFrameContext, cdpEvaluate } from '../context.js';
-import { EnvCollector } from '../../browser/collector.js';
+import { EnvCollector, collectPropertyInRealm } from '../../browser/collector.js';
 
-export function registerCaptureTools(server) {
+export function registerCaptureTools(server, dependencies = {}) {
+  const getCurrentPage = dependencies.getPage || getPage;
+  const getFrameContext = dependencies.getFrameContext || getActiveFrameContext;
+  const evaluateFrame = dependencies.evaluateFrame || cdpEvaluate;
+
   server.tool(
     'collect_env',
     'Collect full browser environment snapshot (navigator, screen, canvas, webgl, fonts, etc.)',
     {},
     async () => {
       try {
-        const page = await getPage();
+        const page = await getCurrentPage();
         const collector = new EnvCollector(page);
         const data = await collector.collectFullSnapshot();
         return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
@@ -32,16 +36,17 @@ export function registerCaptureTools(server) {
     },
     async ({ path, depth }) => {
       try {
-        const frameCtx = getActiveFrameContext();
+        const frameCtx = getFrameContext();
         // When a specific iframe is selected, use CDP Runtime.evaluate in that context.
         // (EnvCollector uses page.evaluate which always targets the main frame.)
         if (frameCtx.contextId != null) {
-          const expr = `(() => { try { const v = ${path}; return { success: true, frameId: ${JSON.stringify(frameCtx.frameId)}, type: typeof v, value: (typeof v === 'object' && v !== null) ? JSON.parse(JSON.stringify(v)) : v }; } catch (e) { return { success: false, error: String(e && e.message || e) }; } })()`;
-          const data = await cdpEvaluate(expr);
+          const args = JSON.stringify({ path, depth });
+          const expr = `(() => ({ ...(${collectPropertyInRealm.toString()})(${args}), frameId: ${JSON.stringify(frameCtx.frameId)} }))()`;
+          const data = await evaluateFrame(expr);
           return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
         }
 
-        const page = await getPage();
+        const page = await getCurrentPage();
         const collector = new EnvCollector(page);
         const data = await collector.collect(path, { depth });
 
