@@ -24,14 +24,13 @@ const server = new McpServer(
   { name: 'deepspider', version: '1.0.0' }
 );
 const runtimeManager = new RuntimeManager();
-const agent = { id: 'mcp-stdio' };
 const context = createMcpContext({
-  sessionId: agent.id,
+  sessionId: 'mcp-stdio',
   runtimeManager,
 });
 const catalog = createToolCatalog([]);
 
-registerMcpCatalog(server, catalog, { runtimeManager, agent });
+registerMcpCatalog(server, catalog, { runtimeManager, agent: context.agent });
 
 // Register all tool groups
 registerBrowserTools(server, context);

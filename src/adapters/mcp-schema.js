@@ -9,13 +9,38 @@ function unsupported(type, path) {
   throw new TypeError(`Unsupported parameter schema type "${String(type)}" at ${path}`)
 }
 
-function literalConstraint(spec, path) {
-  if (Object.hasOwn(spec, 'const')) return z.literal(spec.const)
-  if (!Object.hasOwn(spec, 'enum')) return null
-  if (!Array.isArray(spec.enum) || spec.enum.length === 0) {
-    throw new TypeError(`Parameter enum must be a non-empty array at ${path}`)
+function isScalarValue(type, value) {
+  switch (type) {
+    case 'string':
+      return typeof value === 'string'
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value)
+    case 'integer':
+      return Number.isInteger(value)
+    case 'boolean':
+      return typeof value === 'boolean'
+    default:
+      return false
+  }
+}
+
+function scalarSchema(spec, path, type, fallback) {
+  if (Object.hasOwn(spec, 'enum')) {
+    if (!Array.isArray(spec.enum) || spec.enum.length === 0) {
+      throw new TypeError(`Parameter enum must be a non-empty array at ${path}`)
+    }
+    for (const [index, value] of spec.enum.entries()) {
+      if (!isScalarValue(type, value)) {
+        throw new TypeError(`Invalid enum value at ${path}.enum[${index}]: expected ${type}`)
+      }
+    }
+  }
+  if (Object.hasOwn(spec, 'const') && !isScalarValue(type, spec.const)) {
+    throw new TypeError(`Invalid const at ${path}: expected ${type}`)
   }
 
+  if (Object.hasOwn(spec, 'const')) return z.literal(spec.const)
+  if (!Object.hasOwn(spec, 'enum')) return fallback
   const literals = spec.enum.map((value) => z.literal(value))
   return literals.length === 1 ? literals[0] : z.union(literals)
 }
@@ -25,20 +50,19 @@ function valueSpecToZod(spec, path) {
     throw new TypeError(`Parameter schema must be an object at ${path}`)
   }
 
-  const constrained = literalConstraint(spec, path)
   let schema
   switch (schemaType(spec)) {
     case 'string':
-      schema = constrained || z.string()
+      schema = scalarSchema(spec, path, 'string', z.string())
       break
     case 'number':
-      schema = constrained || z.number()
+      schema = scalarSchema(spec, path, 'number', z.number())
       break
     case 'integer':
-      schema = constrained || z.number().int()
+      schema = scalarSchema(spec, path, 'integer', z.number().int())
       break
     case 'boolean':
-      schema = constrained || z.boolean()
+      schema = scalarSchema(spec, path, 'boolean', z.boolean())
       break
     case 'array':
       schema = z.array(spec.items
@@ -78,7 +102,8 @@ function valueSpecToZod(spec, path) {
 function propertySpecToZod(spec, path) {
   let schema = valueSpecToZod(spec, path)
   if (spec.required !== true) schema = schema.optional()
-  if (Object.hasOwn(spec, 'default')) schema = schema.default(spec.default)
+  if (typeof spec.description === 'string') schema = schema.describe(spec.description)
+  if (Object.hasOwn(spec, 'default')) schema = schema.meta({ default: spec.default })
   return schema
 }
 
@@ -91,4 +116,8 @@ export function parameterSpecToZodShape(spec, path = 'parameters') {
     name,
     propertySpecToZod(property, `${path}.${name}`),
   ]))
+}
+
+export function parameterSpecToZodObject(spec) {
+  return z.object(parameterSpecToZodShape(spec)).catchall(z.json())
 }

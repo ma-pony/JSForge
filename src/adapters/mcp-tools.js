@@ -1,15 +1,19 @@
-import { parameterSpecToZodShape } from './mcp-schema.js'
+import { parameterSpecToZodObject } from './mcp-schema.js'
 import { DeepSpiderToolError } from '../tools/errors.js'
 
-function textResult(value, isError = false) {
+function textResult(text, isError = false) {
   return {
-    content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+    content: [{ type: 'text', text }],
     ...(isError ? { isError: true } : {}),
   }
 }
 
+function jsonResult(value, isError = false) {
+  return textResult(JSON.stringify(value, null, 2), isError)
+}
+
 function toolErrorResult(error) {
-  return textResult({
+  return jsonResult({
     error: {
       code: error.code,
       message: error.message,
@@ -22,15 +26,17 @@ export function registerMcpCatalog(server, catalog, { runtimeManager, agent }) {
   for (const definition of catalog) {
     server.registerTool(definition.name, {
       description: definition.description,
-      inputSchema: parameterSpecToZodShape(definition.parameters),
+      inputSchema: parameterSpecToZodObject(definition.parameters),
     }, async (args, extra) => {
       try {
         const value = await runtimeManager.run(
           agent,
-          (runtime, signal) => definition.execute(args, { runtime, signal, agent }),
+          (runtime, signal) => definition.execute(runtime, args, signal),
           { signal: extra.signal },
         )
-        return textResult(value)
+        return definition.render
+          ? textResult(definition.render(value))
+          : jsonResult(value)
       } catch (error) {
         if (error instanceof DeepSpiderToolError) return toolErrorResult(error)
         throw error

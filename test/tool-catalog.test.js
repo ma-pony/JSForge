@@ -7,6 +7,7 @@ import {
 } from '../src/tools/catalog.js'
 import { DeepSpiderToolError } from '../src/tools/errors.js'
 import { registerMcpCatalog } from '../src/adapters/mcp-tools.js'
+import { createMcpContext } from '../src/mcp/context.js'
 import { RuntimeManager } from '../src/runtime/RuntimeManager.js'
 
 function tool(name, overrides = {}) {
@@ -66,6 +67,23 @@ test('tool definitions contain only plain frozen catalog metadata', () => {
   }, TypeError)
 })
 
+test('tool definitions freeze mutable descendants beneath a pre-frozen schema root', () => {
+  const nested = { type: 'string', required: true }
+  const parameters = Object.freeze({ selector: nested })
+
+  defineDeepSpiderTool({
+    name: 'pre_frozen',
+    description: 'Freeze all descendants',
+    parameters,
+    execute: async () => ({}),
+  })
+
+  assert.equal(Object.isFrozen(nested), true)
+  assert.throws(() => {
+    nested.required = false
+  }, TypeError)
+})
+
 test('tool definitions reject fields outside the catalog contract', () => {
   assert.throws(
     () => defineDeepSpiderTool({
@@ -122,7 +140,7 @@ test('MCP catalog dispatches with the exact Agent and request signal through Run
       return runtime
     },
   })
-  const agent = { id: 'mcp-test' }
+  const context = createMcpContext({ sessionId: 'mcp-test', runtimeManager: manager })
   const requestController = new globalThis.AbortController()
   let runAgent
   let runSignal
@@ -136,37 +154,37 @@ test('MCP catalog dispatches with the exact Agent and request signal through Run
     parameters: {
       selector: { type: 'string', required: true },
     },
-    execute: async (args, context) => {
-      assert.deepEqual(args, { selector: '#main' })
-      assert.equal(context.runtime, runtime)
-      assert.equal(context.agent, agent)
-      assert.equal(context.signal instanceof globalThis.AbortSignal, true)
+    execute: async (receivedRuntime, args, signal) => {
+      assert.equal(receivedRuntime, runtime)
+      assert.deepEqual(args, { selector: '#main', traceId: 'trace-1' })
+      assert.equal(signal instanceof globalThis.AbortSignal, true)
       return { selected: args.selector }
     },
   })
 
   registerMcpCatalog(server, createToolCatalog([[definition]]), {
     runtimeManager: manager,
-    agent,
+    agent: context.agent,
   })
 
   assert.equal(server.registrations.length, 1)
   const registration = server.registrations[0]
   assert.equal(registration.name, 'inspect_page')
   assert.equal(registration.config.description, 'inspect_page description')
-  assert.deepEqual(
-    registration.config.inputSchema.selector.safeParse('#main').data,
-    '#main',
-  )
+  const parsedArgs = registration.config.inputSchema.parse({
+    selector: '#main',
+    traceId: 'trace-1',
+  })
+  assert.deepEqual(parsedArgs, { selector: '#main', traceId: 'trace-1' })
 
   const result = await registration.callback(
-    { selector: '#main' },
+    parsedArgs,
     { signal: requestController.signal },
   )
 
-  assert.equal(runAgent, agent)
+  assert.equal(runAgent, context.agent)
   assert.equal(runSignal, requestController.signal)
-  assert.deepEqual(runtimeOwners, [agent])
+  assert.equal(runtimeOwners[0], context.agent)
   assert.deepEqual(result, {
     content: [{
       type: 'text',
@@ -174,6 +192,61 @@ test('MCP catalog dispatches with the exact Agent and request signal through Run
     }],
   })
 
+  await manager.closeAll('test complete')
+})
+
+test('MCP catalog invokes domain handlers with exactly runtime, args, and signal', async () => {
+  const server = registrationServer()
+  const runtime = { close: async () => {} }
+  const manager = new RuntimeManager({ runtimeFactory: async () => runtime })
+  const args = { value: 'input' }
+  let received
+  const definition = tool('argument_contract', {
+    execute(...values) {
+      received = values
+      return { ok: true }
+    },
+  })
+
+  registerMcpCatalog(server, createToolCatalog([[definition]]), {
+    runtimeManager: manager,
+    agent: { id: 'mcp-test' },
+  })
+  await server.registrations[0].callback(
+    args,
+    { signal: new globalThis.AbortController().signal },
+  )
+
+  assert.equal(received.length, 3)
+  assert.equal(received[0], runtime)
+  assert.equal(received[1], args)
+  assert.equal(received[2] instanceof globalThis.AbortSignal, true)
+  await manager.closeAll('test complete')
+})
+
+test('MCP catalog uses a tool render function as the exact text output', async () => {
+  const server = registrationServer()
+  const manager = new RuntimeManager({
+    runtimeFactory: async () => ({ close: async () => {} }),
+  })
+  const definition = tool('rendered_tool', {
+    execute: async () => ({ selected: '#main' }),
+    render: (value) => `Selected ${value.selected}`,
+  })
+
+  registerMcpCatalog(server, createToolCatalog([[definition]]), {
+    runtimeManager: manager,
+    agent: { id: 'mcp-test' },
+  })
+
+  const result = await server.registrations[0].callback(
+    {},
+    { signal: new globalThis.AbortController().signal },
+  )
+
+  assert.deepEqual(result, {
+    content: [{ type: 'text', text: 'Selected #main' }],
+  })
   await manager.closeAll('test complete')
 })
 

@@ -2,7 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { z } from 'zod'
 
-import { parameterSpecToZodShape } from '../src/adapters/mcp-schema.js'
+import * as mcpSchema from '../src/adapters/mcp-schema.js'
+
+const { parameterSpecToZodShape } = mcpSchema
 
 test('converts scalar parameters with required, optional, default, and description metadata', () => {
   const shape = parameterSpecToZodShape({
@@ -12,20 +14,37 @@ test('converts scalar parameters with required, optional, default, and descripti
       description: 'Text to inspect',
     },
     score: { type: 'number' },
-    limit: { type: 'integer', default: 20 },
+    limit: { type: 'integer', required: true, default: 20 },
+    mode: { type: 'string', default: 'auto' },
     enabled: { type: 'boolean', required: true },
   })
   const schema = z.object(shape)
 
   assert.equal(shape.text.description, 'Text to inspect')
-  assert.deepEqual(schema.parse({ text: 'hello', enabled: true }), {
+  assert.equal(shape.limit.meta().default, 20)
+  assert.equal(shape.mode.meta().default, 'auto')
+  assert.deepEqual(schema.parse({ text: 'hello', limit: 5, enabled: true }), {
     text: 'hello',
-    limit: 20,
+    limit: 5,
     enabled: true,
   })
-  assert.equal(schema.safeParse({ enabled: true }).success, false)
+  assert.equal(schema.safeParse({ text: 'hello', enabled: true }).success, false)
   assert.equal(schema.safeParse({ text: 'hello', enabled: true, limit: 1.5 }).success, false)
-  assert.equal(schema.safeParse({ text: 'hello', enabled: 'yes' }).success, false)
+  assert.equal(schema.safeParse({ text: 'hello', limit: 5, enabled: 'yes' }).success, false)
+})
+
+test('builds an explicit open parameter object that preserves undeclared JSON arguments', () => {
+  assert.equal(typeof mcpSchema.parameterSpecToZodObject, 'function')
+  const schema = mcpSchema.parameterSpecToZodObject({
+    selector: { type: 'string', required: true },
+  })
+  const input = {
+    selector: '#main',
+    trace: { id: 1 },
+  }
+
+  assert.deepEqual(schema.parse(input), input)
+  assert.equal(schema.safeParse({ ...input, invalid: () => {} }).success, false)
 })
 
 test('converts arrays, explicit objects, and unconstrained JSON values', () => {
@@ -70,7 +89,7 @@ test('converts arrays, explicit objects, and unconstrained JSON values', () => {
 })
 
 test('converts enum, const, and oneOf constraints', () => {
-  const schema = z.object(parameterSpecToZodShape({
+  const shape = parameterSpecToZodShape({
     direction: {
       type: 'string',
       enum: ['up', 'down'],
@@ -84,10 +103,11 @@ test('converts enum, const, and oneOf constraints', () => {
       ],
       required: true,
     },
-  }))
+  })
+  const schema = z.object(shape)
 
+  assert.equal(shape.direction.meta().default, 'down')
   assert.deepEqual(schema.parse({ answer: 42, choice: 'auto' }), {
-    direction: 'down',
     answer: 42,
     choice: 'auto',
   })
@@ -102,5 +122,16 @@ test('rejects unsupported parameter types with a clear path', () => {
   assert.throws(
     () => parameterSpecToZodShape({ when: { type: 'null' } }),
     /Unsupported parameter schema type "null" at parameters\.when/,
+  )
+})
+
+test('rejects enum and const values incompatible with their declared scalar type', () => {
+  assert.throws(
+    () => parameterSpecToZodShape({ value: { type: 'string', const: 42 } }),
+    /Invalid const at parameters\.value: expected string/,
+  )
+  assert.throws(
+    () => parameterSpecToZodShape({ value: { type: 'integer', enum: [1, 1.5] } }),
+    /Invalid enum value at parameters\.value\.enum\[1\]: expected integer/,
   )
 })

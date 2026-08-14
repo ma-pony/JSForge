@@ -12,12 +12,12 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null
 }
 
-function deepFreeze(value) {
-  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
-    return value
-  }
+function deepFreeze(value, seen = new WeakSet()) {
+  if (value === null || typeof value !== 'object') return value
+  if (seen.has(value)) return value
 
-  for (const child of Object.values(value)) deepFreeze(child)
+  seen.add(value)
+  for (const child of Object.values(value)) deepFreeze(child, seen)
   return Object.freeze(value)
 }
 

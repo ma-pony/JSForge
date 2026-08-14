@@ -98,6 +98,7 @@ test('stdio shutdown closes the exact synthetic MCP Runtime through RuntimeManag
 
   assert.equal(await exited, 0)
   assert.deepEqual(owners, [{ id: 'mcp-stdio' }])
+  assert.equal(owners[0], context.agent)
   assert.deepEqual(closes, ['stdio shutdown'])
   assert.equal(manager.entries.size, 0)
 })
