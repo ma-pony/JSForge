@@ -3,6 +3,7 @@
   "version": "1.0.0-beta",
   "description": "智能爬虫工程平台 - MCP Server for Claude Code integration",
   "type": "module",
+  "packageManager": "pnpm@11.21.0",
   "main": "src/mcp/server.js",
   "files": [
     "bin/",
@@ -51,9 +52,13 @@
     "url": "https://github.com/ma-pony/deepspider/issues"
   },
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=24.0.0"
   },
   "dependencies": {
+    "@deepseek-ai/cordis": "latest",
+    "@deepseek-ai/dsh": "latest",
+    "@deepseek-ai/dsh-tools": "latest",
+    "@deepseek-ai/schemastery": "latest",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@opencode-ai/plugin": "1.18.16",
     "@opencode-ai/sdk": "1.18.16",
@@ -71,10 +76,5 @@
   },
   "lint-staged": {
     "*.js": "eslint --fix"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "opencode-ai"
-    ]
   }
 }

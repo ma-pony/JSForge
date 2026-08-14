@@ -11,6 +11,10 @@ const plugin = JSON.parse(
     'utf8'
   )
 )
+const pnpmWorkspace = fs.readFileSync(
+  new URL('../pnpm-workspace.yaml', import.meta.url),
+  'utf8'
+)
 
 test('OpenCode packages are pinned to one supported version', () => {
   assert.equal(root.dependencies['@opencode-ai/sdk'], '1.18.16')
@@ -20,12 +24,34 @@ test('OpenCode packages are pinned to one supported version', () => {
   assert.equal(plugin.dependencies.zod, root.dependencies.zod)
 })
 
-test('production manifest allows only the OpenCode runtime build', () => {
-  assert.deepEqual(root.pnpm?.onlyBuiltDependencies, ['opencode-ai'])
+test('pnpm build policy allows only the OpenCode runtime build', () => {
+  assert.match(
+    pnpmWorkspace,
+    /^allowBuilds:\n {2}opencode-ai: true\nminimumReleaseAgeExclude:/
+  )
+})
+
+test('pnpm release-age policy covers the current DSH package scope', () => {
+  assert.match(pnpmWorkspace, /^ {2}- '@deepseek-ai\/\*'$/m)
 })
 
 test('manifest declares the Node floor required by the tested project graph', () => {
-  assert.equal(root.engines.node, '>=20.19.0')
+  assert.equal(root.engines.node, '>=24.0.0')
+})
+
+test('manifest declares the current public DSH packages', () => {
+  for (const dependency of [
+    '@deepseek-ai/dsh',
+    '@deepseek-ai/cordis',
+    '@deepseek-ai/dsh-tools',
+    '@deepseek-ai/schemastery',
+  ]) {
+    assert.equal(root.dependencies[dependency], 'latest')
+  }
+})
+
+test('manifest pins the package manager used by CI', () => {
+  assert.equal(root.packageManager, 'pnpm@11.21.0')
 })
 
 test('published package includes the bilingual project readme', () => {
@@ -37,7 +63,8 @@ test('publish jobs use the Node floor and frozen script-free installs', () => {
     new URL('../.github/workflows/publish.yml', import.meta.url),
     'utf8'
   )
-  assert.equal((workflow.match(/node-version: '20\.19'/g) || []).length, 2)
+  assert.equal((workflow.match(/node-version: '24'/g) || []).length, 2)
+  assert.equal((workflow.match(/version: 11\.21\.0/g) || []).length, 2)
   assert.equal(
     (workflow.match(/pnpm install --frozen-lockfile --ignore-scripts/g) || []).length,
     2
