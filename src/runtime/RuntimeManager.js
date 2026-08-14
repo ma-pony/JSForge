@@ -60,6 +60,7 @@ export class RuntimeManager {
     this.runtimeFactory = runtimeFactory
     this.entries = new Map()
     this.closing = false
+    this._inFlightDisposals = new Set()
     this._closePromise = null
   }
 
@@ -113,7 +114,13 @@ export class RuntimeManager {
 
     this.entries.delete(id)
     entry.abortController.abort(abortError(reason || `Agent ${id} disposed`))
-    await this._closeEntry(entry, reason)
+    const disposal = this._closeEntry(entry, reason)
+    this._inFlightDisposals.add(disposal)
+    try {
+      await disposal
+    } finally {
+      this._inFlightDisposals.delete(disposal)
+    }
   }
 
   closeAll(reason) {
@@ -121,6 +128,7 @@ export class RuntimeManager {
 
     this.closing = true
     const entries = [...this.entries.values()]
+    const inFlightDisposals = [...this._inFlightDisposals]
     this.entries.clear()
     for (const entry of entries) {
       entry.abortController.abort(abortError(reason || 'RuntimeManager is closing'))
@@ -128,7 +136,10 @@ export class RuntimeManager {
 
     this._closePromise = (async () => {
       const results = await Promise.allSettled(
-        entries.map((entry) => this._closeEntry(entry, reason)),
+        [
+          ...inFlightDisposals,
+          ...entries.map((entry) => this._closeEntry(entry, reason)),
+        ],
       )
       const errors = results
         .filter((result) => result.status === 'rejected')
@@ -192,7 +203,8 @@ export class RuntimeManager {
     let runtime
     try {
       runtime = await entry.runtimePromise
-    } catch {
+    } catch (error) {
+      if (error?.cleanupError) throw error.cleanupError
       return
     }
     await runtime.close(reason)

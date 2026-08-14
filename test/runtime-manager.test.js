@@ -246,6 +246,47 @@ test('disposeAgent closes and removes only the exact Agent Runtime', async () =>
   assert.notEqual(await manager.get({ id: 'alpha' }), alpha)
 })
 
+test('closeAll waits for an exact disposal that began during Runtime creation', async () => {
+  const creation = deferred()
+  const closeStarted = deferred()
+  const releaseClose = deferred()
+  const runtime = createRuntime('alpha', {
+    close: async () => {
+      closeStarted.resolve()
+      await releaseClose.promise
+    },
+  })
+  const manager = new RuntimeManager({
+    runtimeFactory: async () => creation.promise,
+  })
+  const getResult = manager.get({ id: 'alpha' }).catch((error) => error)
+  await setImmediate()
+
+  const disposing = manager.disposeAgent({ id: 'alpha' }, 'agent disposed')
+  const closing = manager.closeAll('process shutdown')
+  let closeAllSettled = false
+  closing.then(
+    () => { closeAllSettled = true },
+    () => { closeAllSettled = true },
+  )
+
+  try {
+    await setImmediate()
+    assert.equal(closeAllSettled, false)
+
+    creation.resolve(runtime)
+    await closeStarted.promise
+    await setImmediate()
+    assert.equal(closeAllSettled, false)
+  } finally {
+    creation.resolve(runtime)
+    releaseClose.resolve()
+    await Promise.allSettled([disposing, closing])
+  }
+
+  assert.match((await getResult).message, /agent disposed/)
+})
+
 test('an operation canceled while queued rejects without executing or breaking the queue', async () => {
   const manager = new RuntimeManager({
     runtimeFactory: async (agent) => createRuntime(agent.id),
@@ -269,12 +310,16 @@ test('an operation canceled while queued rejects without executing or breaking t
   await assert.rejects(canceled, /queue canceled/)
   assert.equal(canceledOperationRan, false)
 
-  const thirdRan = deferred()
-  const third = manager.run({ id: 'alpha' }, async () => thirdRan.resolve())
+  let thirdOperationRan = false
+  const third = manager.run({ id: 'alpha' }, async () => {
+    thirdOperationRan = true
+  })
   await setImmediate()
   assert.equal(canceledOperationRan, false)
+  assert.equal(thirdOperationRan, false)
   releaseFirst.resolve()
-  await Promise.all([first, third, thirdRan.promise])
+  await Promise.all([first, third])
+  assert.equal(thirdOperationRan, true)
 })
 
 test('cancellation stops waiting for lazy Runtime creation without discarding the shared creation', async () => {
@@ -332,6 +377,77 @@ test('closeAll rejects new work, aborts active work, and attempts every Runtime 
 
   alphaClosed.resolve()
   await assert.rejects(closing, /alpha close failed/)
+})
+
+test('closeAll reports partial Runtime cleanup failure after attempting every close', async () => {
+  const creation = deferred()
+  let partialCloses = 0
+  let betaCloses = 0
+  const partial = createRuntime('partial', {
+    close: async () => {
+      partialCloses += 1
+      throw new Error('partial cleanup failed')
+    },
+  })
+  const manager = new RuntimeManager({
+    runtimeFactory: async (agent) => {
+      if (agent.id === 'alpha') return creation.promise
+      return createRuntime(agent.id, {
+        close: async () => {
+          betaCloses += 1
+        },
+      })
+    },
+  })
+  const alphaGet = manager.get({ id: 'alpha' }).catch((error) => error)
+  await setImmediate()
+  await manager.get({ id: 'beta' })
+
+  const closing = manager.closeAll('process shutdown')
+  const failure = new Error('creation failed')
+  failure.runtime = partial
+  creation.reject(failure)
+
+  await assert.rejects(closing, /partial cleanup failed/)
+  assert.match((await alphaGet).message, /process shutdown/)
+  assert.equal(partialCloses, 1)
+  assert.equal(betaCloses, 1)
+})
+
+test('closing during asynchronous browser creation cleans the late client without launching it', async () => {
+  const browserFactoryStarted = deferred()
+  const browserFactoryResult = deferred()
+  let launches = 0
+  let closes = 0
+  const client = {
+    launch: async () => {
+      launches += 1
+    },
+    close: async () => {
+      closes += 1
+    },
+  }
+  const runtime = new DeepSpiderRuntime({
+    sessionId: 'alpha',
+    paths: { browserData: '/sessions/alpha/browser-data' },
+    browserFactory: async () => {
+      browserFactoryStarted.resolve()
+      return browserFactoryResult.promise
+    },
+    dataStoreFactory: () => ({}),
+  })
+
+  const getting = runtime.getBrowserClient()
+  await browserFactoryStarted.promise
+  const closing = runtime.close('runtime shutdown')
+  browserFactoryResult.resolve(client)
+
+  const [getResult, closeResult] = await Promise.allSettled([getting, closing])
+  assert.equal(getResult.status, 'rejected')
+  assert.match(getResult.reason.message, /runtime shutdown/)
+  assert.equal(closeResult.status, 'fulfilled')
+  assert.equal(launches, 0)
+  assert.equal(closes, 1)
 })
 
 test('RuntimeManager explicitly rejects a missing or empty Agent ID', async () => {

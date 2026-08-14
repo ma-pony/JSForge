@@ -182,6 +182,7 @@ export class DeepSpiderRuntime {
         env: this.env,
         signal: this._lifetime.signal,
       })
+      throwIfAborted(this._lifetime.signal)
       if (!client || typeof client.launch !== 'function') {
         throw new TypeError('browserFactory must return a BrowserClient')
       }
