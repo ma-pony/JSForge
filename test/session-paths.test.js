@@ -1,0 +1,70 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+
+import {
+  createSessionPaths,
+  ensureSessionPaths,
+  hashSessionId,
+} from '../src/runtime/SessionPaths.js'
+
+test('hashSessionId returns the deterministic full SHA-256 key', () => {
+  assert.equal(
+    hashSessionId('session-alpha'),
+    '99b1d23983d285eb64aa2e321f429dd6678a40ec15149dc258098ed6a5bd536d'
+  )
+})
+
+test('createSessionPaths isolates every derived path beneath its hashed root', () => {
+  const baseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-session-paths-'))
+  const alpha = createSessionPaths('session-alpha', { root: baseRoot })
+  const beta = createSessionPaths('session-beta', { root: baseRoot })
+
+  assert.equal(alpha.sessionId, 'session-alpha')
+  assert.equal(alpha.key, hashSessionId('session-alpha'))
+  assert.equal(alpha.root, path.join(baseRoot, alpha.key))
+  assert.notEqual(alpha.root, beta.root)
+
+  for (const child of [
+    alpha.metadata,
+    alpha.data,
+    alpha.output,
+    alpha.rebuild,
+    alpha.screenshots,
+    alpha.browserData,
+  ]) {
+    assert.equal(path.dirname(child), alpha.root)
+    assert.equal(fs.existsSync(child), false)
+    assert.equal(child.includes(alpha.sessionId), false)
+  }
+})
+
+test('createSessionPaths rejects empty and non-string IDs', () => {
+  for (const sessionId of ['', 1, null, undefined]) {
+    assert.throws(() => createSessionPaths(sessionId), /non-empty string/)
+  }
+})
+
+test('ensureSessionPaths creates private session directories', () => {
+  const baseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-session-paths-'))
+  const paths = createSessionPaths('session-alpha', { root: baseRoot })
+
+  ensureSessionPaths(paths)
+
+  for (const directory of [
+    paths.root,
+    paths.metadata,
+    paths.data,
+    paths.output,
+    paths.rebuild,
+    paths.screenshots,
+    paths.browserData,
+  ]) {
+    assert.equal(fs.statSync(directory).isDirectory(), true)
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(directory).mode & 0o777, 0o700)
+    }
+  }
+})

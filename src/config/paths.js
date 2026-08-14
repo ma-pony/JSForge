@@ -5,7 +5,7 @@
 
 import { join } from 'path';
 import { homedir } from 'os';
-import { mkdirSync, existsSync } from 'fs';
+import { mkdirSync, chmodSync } from 'fs';
 
 // 基础目录：~/.deepspider/
 export const DEEPSPIDER_HOME = join(homedir(), '.deepspider');
@@ -36,9 +36,19 @@ export const PATHS = {
  * 确保目录存在
  */
 export function ensureDir(dir) {
-  if (dir && !existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+  return ensureSecureDir(dir);
+}
+
+/**
+ * 确保 DeepSpider 自有敏感目录仅可由当前用户访问
+ */
+export function ensureSecureDir(dir) {
+  if (dir) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    chmodSync(dir, 0o700);
   }
+
+  return dir;
 }
 
 /**
