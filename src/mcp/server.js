@@ -16,11 +16,22 @@ import { registerRebuildTools } from './tools/rebuild.js';
 import { registerStealthTools } from './tools/stealth.js';
 import { createMcpContext } from './context.js';
 import { installMcpShutdown } from './lifecycle.js';
+import { RuntimeManager } from '../runtime/RuntimeManager.js';
+import { createToolCatalog } from '../tools/catalog.js';
+import { registerMcpCatalog } from '../adapters/mcp-tools.js';
 
 const server = new McpServer(
   { name: 'deepspider', version: '1.0.0' }
 );
-const context = createMcpContext({ sessionId: 'mcp-stdio' });
+const runtimeManager = new RuntimeManager();
+const agent = { id: 'mcp-stdio' };
+const context = createMcpContext({
+  sessionId: agent.id,
+  runtimeManager,
+});
+const catalog = createToolCatalog([]);
+
+registerMcpCatalog(server, catalog, { runtimeManager, agent });
 
 // Register all tool groups
 registerBrowserTools(server, context);
