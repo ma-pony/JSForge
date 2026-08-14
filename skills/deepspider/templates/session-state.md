@@ -28,6 +28,35 @@
 
 ---
 
+## Challenge Identity
+
+| 字段 | 值 |
+|------|---|
+| Browser Session | `[DataStore sessionId]` |
+| Script ID | `[当前会话精确 scriptId]` |
+| Script URL | `[填写]` |
+| Target SHA-256 | `[manifest.targetSha256]` |
+| Environment SHA-256 | `[manifest.environmentSha256]` |
+
+任一身份字段变化后，旧运行结果必须标记 Invalid，不得继续比较。
+
+## Runtime Evidence
+
+| Run ID | Mode | Evidence Level | Target Integrity | 结果 |
+|--------|------|----------------|------------------|------|
+| `[填写]` | `[probe / verify]` | `[Observed / Hypothesis / Verified / Invalid]` | `[valid / invalid]` | `[填写]` |
+
+证据等级：
+
+- Observed：浏览器或 probe 直接观察。
+- Hypothesis：基于 probe 的待验证推断。
+- Verified：相同身份的 verify 多样本确认。
+- Invalid：target、session、script 或环境身份不一致。
+
+只有 Verified 结果可以写入 Proven Facts。
+
+---
+
 ## 已证实事实
 
 > 只记录有明确证据支撑的结论。记录证据来源（工具调用 / 截图 / 代码行号）。

@@ -104,6 +104,20 @@ Trigger: [user action]
 - 请求内容一致但本地仍被拒绝：逐项验证协议、TLS、HTTP 版本、Header 顺序、连接状态与会话绑定，处理传输层差异。
 - 任一路线只有在非浏览器客户端成功获得预期业务响应后才能进入 handoff。
 
+## Runtime 不可变样本契约
+
+进入 runtime 阶段后，捕获脚本是只读实验样本：
+
+**禁止直接修改目标脚本及其动态源码。**
+
+1. 用当前捕获会话的精确 `scriptId` 调用 `export_rebuild_bundle`，记录 `sessionId`、`scriptId` 和 Target SHA-256。
+2. `target.js`、动态 chunk、常量池和控制流均禁止修改；格式化或反混淆副本只能用于阅读。
+3. 先运行 `node runner.mjs --mode probe`，再用 `analyze_runtime_trace` 找到最高优先级的环境分歧。
+4. 只能根据真实浏览器证据修改 `env.js` 和 `probe.js`，禁止跳过循环、opcode、`debugger` 或条件分支。
+5. probe 会改变可观察环境，其输出只能写入 Hypothesis，不能写入 Proven Facts。
+6. 只有 `node runner.mjs --mode verify` 在 target hash 有效时产生的结果，才可写入 Proven Facts。
+7. 浏览器与本地样本的 sessionId、scriptId 或 SHA-256 不一致时，比较结果一律标记 Invalid。
+
 ## 反模式清单
 
 | ID | 反模式 | 正确做法 |
@@ -114,6 +128,11 @@ Trigger: [user action]
 | AP-R2 | 试图完全还原 VM 调度器内部 | 只提取影响目标字段的关键算子 |
 | AP-RT1 | 盲目堆环境补丁 | 诊断首次分歧点，只补必要的 |
 | AP-RT2 | Node 报错就补 window.xxx = {} | 用 collect_property 获取真实值 |
+| AP-RT4 | 修改 target.js 或动态 chunk 后继续分析 | 目标源码只读，所有修复只发生在 env.js / probe.js |
+| AP-RT5 | 把 probe 输出当作真实运行证据 | probe 只形成 Hypothesis，verify 才能形成 Proven Facts |
+| AP-RT6 | 把 process/Buffer/global 暴露给目标 | 使用干净 realm，Node-only 全局默认不存在 |
+| AP-RT7 | 混用不同 session/hash 的样本 | 每次比较先核对 sessionId、scriptId、Target SHA-256 |
+| AP-RT8 | 为逃出死循环而跳过 opcode 或分支 | 回溯循环前最后一次环境读取或完整性检测 |
 | AP-V1 | 只比对一组样本就宣布成功 | 至少 3 组不同输入 |
 | AP-V2 | 忽略时间戳/随机数等动态参数 | 固定随机种子或 mock 时间后再验证 |
 | AP-X1 | 反调试代码一律删除 | 区分摩擦型和风控型 |

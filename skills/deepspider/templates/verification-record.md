@@ -1,5 +1,23 @@
 # 验证记录
 
+## Immutable Runtime Identity
+
+| 字段 | 值 |
+|------|---|
+| Browser Session | `[填写]` |
+| Script ID | `[填写]` |
+| Target SHA-256 | `[填写]` |
+| Environment SHA-256 | `[填写]` |
+| Verify Run ID | `[填写]` |
+
+本地运行必须使用：
+
+```bash
+node runner.mjs --mode verify
+```
+
+Probe 模式输出不得作为本验证记录的通过依据。
+
 > 模板用途：记录 Python 实现与浏览器原生结果的多样本对比验证。
 > 至少完成 3 组输入输出对比，才可进入 handoff 阶段。
 

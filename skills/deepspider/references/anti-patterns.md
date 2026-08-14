@@ -131,7 +131,7 @@
 - 10 次报错后仍在猜测补什么
 
 **正确做法**：
-1. 先用 `diff_env_requirements(error)` 分析报错
+1. 先运行 probe 并用 `analyze_runtime_trace` 找到最高优先级环境分歧
 2. 用 `collect_property(expr)` 从真实浏览器采集该 API 的真实值
 3. 按真实值补丁，而非猜测
 
@@ -171,6 +171,56 @@
 - 不要预判"可能还需要"
 
 **检测信号**：补了某 API 后，代码中无法找到对该 API 的调用。
+
+---
+
+### AP-RT4：Target-mutation（修改目标样本）
+
+**描述**：向 target.js 或动态 chunk 插入日志、替换字符串、删除检测代码后继续执行，并把结果当成原始行为。
+
+**正确做法**：目标源码只读；使用 probe.js、CDP 断点或 inspector 旁路观察，运行前校验 Target SHA-256。
+
+**检测信号**：出现 `chunk_patched.js`、`target_patched.js`，或对目标源码调用 `.replace()`。
+
+---
+
+### AP-RT5：Probe-as-proof（把探针输出当事实）
+
+**描述**：Probe Hook 或 Proxy 下输出正确，就直接写入 Proven Facts。
+
+**正确做法**：Probe 只形成 Hypothesis；关闭侵入式探针后用 `--mode verify` 重新证明。
+
+**检测信号**：Proven Facts 没有 verify runId 和 Target SHA-256。
+
+---
+
+### AP-RT6：Node-global-leak（暴露 Node 身份）
+
+**描述**：把 process、Buffer、require、module、global 等对象留在目标 realm。
+
+**正确做法**：使用干净 vm realm，只注入目标实际需要的浏览器环境。
+
+**检测信号**：目标脚本中 `typeof process` 或 `typeof global` 不是 `undefined`。
+
+---
+
+### AP-RT7：Cross-sample-comparison（混用样本）
+
+**描述**：将不同捕获会话、不同动态 chunk 或不同常量池的运行结果直接比较。
+
+**正确做法**：比较前核对 sessionId、scriptId、scriptUrl 和 Target SHA-256；任何一项不同都标记 Invalid。
+
+**检测信号**：session-state 没有 Challenge Identity。
+
+---
+
+### AP-RT8：Loop-bypass（修改控制流逃出循环）
+
+**描述**：发现死循环后直接改变 opcode、跳转偏移或条件分支，使程序继续执行。
+
+**正确做法**：回溯进入循环前的最后一次环境读取、完整性检查和状态初始化；目标控制流保持不变。
+
+**检测信号**：补丁中出现跳过 case、增加程序计数器或把条件替换为常量。
 
 ---
 

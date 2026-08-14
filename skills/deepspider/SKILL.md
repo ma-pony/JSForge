@@ -23,6 +23,18 @@ description: JS 逆向工程全流程技能 — 从请求追踪到 Python 爬虫
 
 必须继续还原请求所需的动态参数、客户端状态、环境依赖和传输条件，直到非浏览器客户端获得与真实请求一致的业务响应。无法完成时输出准确阻塞点，保持任务未完成。只有用户明确改变任务范围为浏览器自动化，才允许交付浏览器方案；这不计为逆向完成。
 
+### Runtime 证据契约
+
+补环境阶段的目标脚本必须保持原始字节不变：
+
+**禁止直接修改目标脚本及其动态源码。**
+
+- 用当前会话的精确 `scriptId` 执行 `export_rebuild_bundle`，保存 sessionId、scriptId 和 Target SHA-256。
+- 禁止修改 `target.js`、eval 动态源码、chunk、常量池或控制流；派生格式化文件只能用于阅读。
+- 固定流程为：`export_rebuild_bundle` → `--mode probe` → `analyze_runtime_trace` → `collect_property` → 只修改 `env.js` / `probe.js` → `--mode verify`。
+- probe 输出只能是 Hypothesis；只有 hash 有效的 verify 结果才能进入 Proven Facts。
+- 不同 sessionId、scriptId 或 SHA-256 的结果禁止比较，必须标记 Invalid。
+
 ---
 
 ## 八阶段工作流
