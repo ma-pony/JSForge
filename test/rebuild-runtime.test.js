@@ -11,6 +11,11 @@ import { buildProbeCode, buildRunnerCode } from '../src/rebuild/runtime-template
 function createBundle() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-runtime-'))
   const targetSource = `
+globalThis.nativeSource = Function.prototype.toString.call(Array.prototype.push);
+globalThis.pushDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, 'push');
+globalThis.ownNames = Reflect.ownKeys({ answer: 42 });
+globalThis.clockSample = Date.now();
+(0, eval)('globalThis.dynamicValue = 7;\\n//# sourceURL=dynamic-fixture.js');
 globalThis.inspectRuntime = function inspectRuntime() {
   return {
     process: typeof process,
@@ -20,6 +25,8 @@ globalThis.inspectRuntime = function inspectRuntime() {
     global: typeof global,
     probe: typeof __dsEmit,
     aliases: window === globalThis && self === window && top === window && parent === window,
+    language: navigator.language,
+    dynamicValue,
   };
 };
 `
@@ -27,7 +34,8 @@ globalThis.inspectRuntime = function inspectRuntime() {
   const envCode = `globalThis.window = globalThis;
 globalThis.self = globalThis;
 globalThis.top = globalThis;
-globalThis.parent = globalThis;`
+globalThis.parent = globalThis;
+globalThis.navigator = { language: 'en-US' };`
   const manifest = createManifest({
     sessionId: 'session-1',
     site: 'example.com',
@@ -69,6 +77,8 @@ test('verify mode executes the unchanged target in a realm without Node globals'
     global: 'undefined',
     probe: 'undefined',
     aliases: true,
+    language: 'en-US',
+    dynamicValue: 7,
   })
   assert.doesNotMatch(buildRunnerCode(), /require\(['"]\.\/target\.js/)
 })
@@ -105,6 +115,19 @@ test('probe and verify runs create separate immutable result records', () => {
     assert.equal(typeof record.finishedAt, 'string')
     assert.equal(record.error, null)
   }
+
+  const probeRecord = records.find((record) => record.mode === 'probe')
+  const trace = fs.readFileSync(path.join(directory, 'runs', probeRecord.runId, 'trace.ndjson'), 'utf8')
+  assert.match(trace, /"category":"node-fingerprint"/)
+  assert.match(trace, /"category":"source-integrity"/)
+  assert.match(trace, /"category":"environment-access"/)
+  assert.match(trace, /"category":"timing-random"/)
+  assert.match(trace, /"category":"dynamic-code"/)
+
+  const dynamicFiles = fs.readdirSync(path.join(directory, 'dynamic'))
+  assert.equal(dynamicFiles.length, 1)
+  const dynamicSource = fs.readFileSync(path.join(directory, 'dynamic', dynamicFiles[0]), 'utf8')
+  assert.equal(dynamicSource, 'globalThis.dynamicValue = 7;\n//# sourceURL=dynamic-fixture.js')
 })
 
 test('runner accepts only explicit probe and verify modes', () => {
