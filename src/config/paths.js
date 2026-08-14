@@ -5,7 +5,7 @@
 
 import { join } from 'path';
 import { homedir } from 'os';
-import { mkdirSync, chmodSync } from 'fs';
+import { mkdirSync, chmodSync, existsSync } from 'fs';
 
 // 基础目录：~/.deepspider/
 export const DEEPSPIDER_HOME = join(homedir(), '.deepspider');
@@ -36,7 +36,11 @@ export const PATHS = {
  * 确保目录存在
  */
 export function ensureDir(dir) {
-  return ensureSecureDir(dir);
+  if (dir && !existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  return dir;
 }
 
 /**
@@ -59,7 +63,7 @@ const ON_DEMAND_DIRS = new Set([PATHS.BROWSER_DATA_DIR]);
 
 export function initDirectories() {
   Object.values(PATHS).forEach(dir => {
-    if (!ON_DEMAND_DIRS.has(dir)) ensureDir(dir);
+    if (!ON_DEMAND_DIRS.has(dir)) ensureSecureDir(dir);
   });
 }
 

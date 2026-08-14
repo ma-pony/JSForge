@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
+import { ensureDir } from '../src/config/paths.js'
 import {
   createSessionPaths,
   ensureSessionPaths,
@@ -66,5 +67,16 @@ test('ensureSessionPaths creates private session directories', () => {
     if (process.platform !== 'win32') {
       assert.equal(fs.statSync(directory).mode & 0o777, 0o700)
     }
+  }
+})
+
+test('ensureDir preserves permissions on an existing caller-owned directory', () => {
+  const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-external-dir-'))
+  fs.chmodSync(externalDir, 0o755)
+
+  ensureDir(externalDir)
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(externalDir).mode & 0o777, 0o755)
   }
 })
