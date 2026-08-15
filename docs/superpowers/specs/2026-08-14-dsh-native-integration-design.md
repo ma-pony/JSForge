@@ -1,6 +1,6 @@
 # DeepSpider Native DSH Integration Design
 
-**Status:** design approved in conversation; written revision pending review
+**Status:** reviewed; blocking and important findings incorporated, pending final written approval
 
 **Date:** 2026-08-14
 
@@ -64,7 +64,7 @@ flowchart TD
     DSHAdapter --> Catalog
     MCPAdapter --> Catalog
     DSHAdapter -->|"exec.agent.id"| Manager
-    MCPAdapter -->|"fixed MCP process identity"| Manager
+    MCPAdapter -->|"process-unique MCP identity"| Manager
     Manager --> RuntimeA
     Manager --> RuntimeB
 ```
@@ -107,6 +107,10 @@ The first release excludes:
 
 The Agent plugin is stateless. It must not store a current Agent, Runtime, browser, Page, Frame, DataStore, or task directory.
 
+Code Mode is a presentation contract, not another copy of the Catalog. The Registry still contains the 51 native DeepSpider definitions, while the model receives DSH's `run_code` tool and a generated TypeScript SDK containing those definitions. The Web profile's Host Plane supplies `codeRuntime`; the Spider Preset selects it with `@deepseek-ai/dsh-agent-tool-presentation` and `mode: code`. DeepSpider does not set the process-wide `DSH_TOOLS_MODE` override.
+
+Cordis dynamic tools are intentionally privileged. `@deepseek-ai/dsh-tool-cordis` can define and run model-authored plugins against the live Harness and is equivalent to shell-level access. Session isolation guarantees cover DeepSpider Runtime, browser/CDP state, DataStore, and artifact roots; they do not claim that arbitrary Cordis mutations of the shared Host Plane are Session-local.
+
 ## Core components
 
 ### `src/runtime/SessionPaths.js`
@@ -115,7 +119,7 @@ The Agent plugin is stateless. It must not store a current Agent, Runtime, brows
 
 ```text
 ~/.deepspider/sessions/<sha256(agent.id)>/
-├── session.json
+├── metadata/
 ├── data/
 ├── output/
 ├── rebuild/
@@ -179,12 +183,12 @@ The DSH adapter:
 - Uses `exec.agent.id` as the Session identity.
 - Dispatches through `RuntimeManager.run()`.
 - Forwards `exec.signal`.
-- Uses a JSON output schema and renders domain JSON without MCP envelopes.
+- Declares `output.schema: { type: 'json' }`, passes the Catalog parameter specs directly to `defineTool`, and renders domain JSON without MCP envelopes or Schemastery.
 - Returns stable domain errors when input, Session identity, or Runtime execution fails.
 
 ### `src/adapters/mcp-tools.js`
 
-The MCP adapter exposes the same Catalog. One MCP server process uses one explicit synthetic identity and never borrows a DSH Session or searches for the latest task directory.
+The MCP adapter exposes the same Catalog. Each MCP server process generates one synthetic `mcp-<randomUUID>` identity at startup and keeps it for that process lifetime. Tests may inject an explicit identity. The adapter never borrows a DSH Session or searches for the latest task directory.
 
 ### `src/dsh/host-plugin.js`
 
@@ -211,16 +215,26 @@ The Agent plugin:
 The patch:
 
 - Mounts the Host plugin.
-- Adds the packaged Spider Preset root.
 - Selects `spider` by default.
 
-The Preset mounts the Agent plugin and only the approved DSH capabilities. It composes DSH's public plugins instead of copying their implementation.
+DSH rc.6 deliberately resets configured Preset roots to its shipped root after overlays, then appends `$DSH_HOME/.agent-presets` as the user root. Therefore the patch does not attempt to add a package Preset root. Before spawning DSH, the launcher replaces the package-managed Spider Preset at `$DSH_HOME/.agent-presets/spider` and the static DeepSpider Skill at `$DSH_HOME/skills/deepspider` with the installed package copies. No migration or merge behavior is required.
+
+The Spider Preset mounts the Agent plugin and only the approved DSH capabilities. The capability rows are explicit:
+
+- `@deepseek-ai/dsh-agent-tool-presentation` with `mode: code`.
+- `@deepseek-ai/dsh-tool-todo`.
+- `@deepseek-ai/dsh-tool-cordis`.
+- `@deepseek-ai/dsh-tool-web` with `fetch: false`.
+- `@deepseek-ai/dsh-skill-filesystem` and `@deepseek-ai/dsh-tool-skill`.
+
+The remaining shell, filesystem, search, jobs, Goals, Ask User, compaction, and pruning rows follow DSH's public shipped Preset composition. DeepSpider copies configuration structure, not plugin implementation.
 
 ### `src/dsh/launcher.js`
 
 The launcher:
 
 - Resolves the real `dsh` bin entry from the installed package manifest.
+- Synchronizes the managed Spider Preset and static DeepSpider Skill beneath `DSH_HOME` before spawning.
 - Starts it with `process.execPath` and `shell: false`.
 - Runs `dsh web --patch <packaged-patch>`.
 - Defaults `DSH_PERMISSION_MODE=danger-full-access`.
@@ -280,6 +294,8 @@ The prompt contains these stable invariants. The detailed eight-stage procedure 
 | `evolve_skill` | Disabled |
 | Custom DeepSpider checkpoint | Removed |
 
+Code Mode acceptance distinguishes Registry and model presentation: all 51 DeepSpider definitions must exist in the Registry and generated SDK, while `run_code` is the single model-facing execution entry for them. Cordis acceptance verifies the read-only `cordis_inspect` path; enabling mutation is a trusted YOLO capability, not part of the DeepSpider isolation guarantee.
+
 ## Dependency policy
 
 - `@deepseek-ai/dsh`: `latest`.
@@ -319,6 +335,7 @@ The final DSH launcher change removes all OpenCode-only code, plugins, Agent mar
 ## Failure behavior
 
 - Missing required public DSH capabilities fail startup clearly.
+- Failure to synchronize the managed Spider Preset or Skill fails before DSH is spawned.
 - Runtime creation failure cleans its partial Runtime and allows a later retry.
 - Cancellation propagates from DSH through the queue into browser and runtime operations.
 - A tool call without an Agent identity fails explicitly.
@@ -347,6 +364,7 @@ Remaining work is intentionally compressed into four stages.
 - Make DataStore an instance owned by DeepSpiderRuntime.
 - Pass the DataStore explicitly into BrowserClient and interceptors.
 - Remove the last legacy MCP registrations and DataStore singleton.
+- Replace the literal `mcp-stdio` identity with one process-unique MCP identity generated at startup.
 - Verify the Catalog exposes exactly 51 tools and two Runtimes cannot share paths or state.
 
 ### Stage 2: Native DSH integration
@@ -361,6 +379,7 @@ Remaining work is intentionally compressed into four stages.
 
 - Compose the Spider Preset with the approved capabilities.
 - Add the packaged DSH patch.
+- Add launcher synchronization for the managed Preset and static Skill under `DSH_HOME`.
 - Replace the Agent launcher and preserve default YOLO mode.
 - Delete OpenCode source, plugins, dependencies, commands, tests, and documentation references.
 - Validate the resolved DSH configuration and packed binary layout.
@@ -369,9 +388,12 @@ Remaining work is intentionally compressed into four stages.
 
 - Update Chinese and English READMEs together.
 - Add scheduled DSH dependency refresh and strengthen release CI.
-- Run one real DSH Web startup and native tool smoke.
+- Run one real DSH Web startup, mount the managed Spider Preset, and verify the native Registry contains all 51 DeepSpider tools.
+- Verify the Code Mode SDK contains the same 51 definitions and execute one harmless DeepSpider call through `run_code`.
+- Call read-only `cordis_inspect` to prove the Cordis Host runner and Agent tool are connected.
 - Prove two Session identities map to different Runtime roots using controlled Runtimes.
-- Run one real Patchright browser smoke and verify SIGTERM closes it.
+- Prove two default MCP server instances receive different synthetic identities and roots.
+- Through a real DSH Spider Session, call a native DeepSpider navigation tool against a controlled local page, record its Chromium PID, send SIGTERM to `deepspider agent`, and assert that exact PID exits through Host `closeAll()`.
 - Run unit, lint, frozen install, packed install, and dry-pack checks.
 
 No two-real-browser matrix, custom checkpoint replay suite, exhaustive lifecycle race suite, or old-version compatibility matrix is required.
@@ -383,10 +405,12 @@ No two-real-browser matrix, custom checkpoint replay suite, exhaustive lifecycle
 3. Same-Session work serializes and different Sessions can overlap.
 4. Session disposal closes its browser; process shutdown closes all browsers.
 5. DSH and MCP dispatch through the same 51 Tool Catalog definitions.
-6. The Spider Preset enables Goals, Todo, Code Mode, Cordis dynamic tools, and `web_search`.
+6. The Spider Preset enables Goals, Todo, Code Mode, Cordis dynamic tools, and `web_search`; the Code Mode SDK contains the 51 DeepSpider definitions and `run_code` dispatches one successfully.
 7. The Spider Preset excludes `web_fetch`, Plan Mode, Subagents, Workflows, Ralph, and `evolve_skill`.
 8. No custom DeepSpider checkpoint or Schemastery direct dependency remains.
 9. OpenCode code and dependencies are removed without a compatibility layer.
 10. Node.js `>=24.0.0` and pnpm `11.21.0` are consistent across manifest, CI, documentation, and packaging.
-11. A real DSH startup, real Patchright operation, exit cleanup, and packed install pass.
-12. Direct-request delivery and immutable-target guarantees remain enforced.
+11. A packed install synchronizes and mounts the managed Spider Preset and static Skill without relying on a custom Preset root overlay.
+12. A browser launched through a native DSH DeepSpider tool exits when the DSH launcher receives SIGTERM.
+13. A read-only `cordis_inspect` call succeeds while Cordis mutations remain explicitly outside the DeepSpider isolation guarantee.
+14. Direct-request delivery and immutable-target guarantees remain enforced.
