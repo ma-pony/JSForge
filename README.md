@@ -3,9 +3,9 @@
 [![npm version](https://img.shields.io/npm/v/deepspider.svg)](https://www.npmjs.com/package/deepspider)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> AI 原生的 JavaScript 逆向工程平台——从真实请求证据出发，定位加密链路、还原算法，并交付可运行的爬虫代码。
+> AI 原生的 JavaScript 逆向工程平台——从真实请求证据出发，定位加密链路、还原算法，并交付可直接请求的实现与可运行爬虫代码。
 
-DeepSpider 将 OpenCode Agent、Patchright 浏览器和 Chrome DevTools Protocol（CDP）组合成一套完整的逆向工作台。它不是只会生成代码的聊天助手：Agent 可以直接操作真实页面、捕获网络与脚本、设置 Hook 和断点、收集浏览器环境，并用真实请求验证最终实现。
+DeepSpider 将原生 DSH Web、Patchright Chromium 与 Chrome DevTools Protocol（CDP）组合成一套逆向工作台。浏览器操作的职责是采集请求、脚本和运行时证据；最终目标是得到经真实请求验证、可脱离浏览器直接调用的实现，而不是停留在页面自动化过程。
 
 [English](README_EN.md)
 
@@ -18,19 +18,19 @@ DeepSpider 将 OpenCode Agent、Patchright 浏览器和 Chrome DevTools Protocol
 - **渐进式分析**：按任务阶段加载对应经验和参考资料，避免一次性堆入无关上下文。
 - **多样本验证**：输出前对比浏览器、Node.js、Python 和真实请求结果，减少“代码能跑但结果不对”。
 
-### 真实浏览器 + CDP
+### Patchright Chromium + CDP
 
-- Patchright 是当前唯一浏览器底座，负责页面操作与反检测浏览器环境。
+- Patchright Chromium 是当前浏览器运行时，负责页面操作与反检测浏览器环境。
 - CDP 深度采集请求、响应、脚本、WebSocket、控制台、DOM、存储和调用栈。
 - 支持 Hook 注入、XHR 断点、源码文本断点、单步调试、变量求值和反调试开关。
 - 支持导出绑定当前会话和脚本哈希的补环境 bundle，用于探测并复现浏览器环境依赖。
 
-### 从分析到可交付代码
+### 从分析到可直接请求的交付
 
 - 内置 Spider Agent 和 `intake → evidence → locate → recover → runtime → extraction → validation → handoff` 八阶段工作流。
-- 按任务保存请求链、会话状态、算法代码、fixtures、验证记录和爬虫项目。
-- 可作为独立 OpenCode TUI 使用，也可作为 MCP Server 接入 Claude Code 等客户端。
-- 提供 CycleTLS 轻量请求模式，不需要浏览器时可直接发起单次 HTTP 请求。
+- 每个 Session 保存请求链、会话状态、算法代码、fixtures、验证记录和爬虫项目。
+- DSH Web 提供多个 Session、Goals 与 Code Mode；模型和凭据由 DSH 的设置页面持有与管理。
+- Code Mode 通过 `run_code` 和生成的 TypeScript SDK 呈现 DeepSpider 工具目录，便于把已验证的算法整理为直接请求实现。
 
 ## 适合处理什么
 
@@ -42,103 +42,64 @@ DeepSpider 将 OpenCode Agent、Patchright 浏览器和 Chrome DevTools Protocol
 
 ## 快速开始
 
-需要 Node.js `20.19.0` 或更高版本。安装过程会通过 Patchright 下载 Chromium。
+需要 Node.js `>=24.0.0`。安装过程会通过 Patchright 下载 Chromium。
 
 ```bash
 npm install -g deepspider
 deepspider --version
 ```
 
-首次启动 Agent：
+启动 Agent：
 
 ```bash
-deepspider agent
+deepspider agent [--port <number>] [--verbose]
 ```
 
-首次运行会进入 OpenCode 沙箱初始化向导：
+例如：
 
-- `link-auth`：仅复用已有 OpenCode 登录凭据。
-- `fresh`：创建完全独立的空沙箱。
-
-完成初始化后进入 OpenCode TUI，直接描述目标和交付要求，例如：
-
-```text
-分析 https://example.com/search 的请求，找出 sign 参数生成逻辑，
-验证后给出 Python 实现和可运行的请求示例。
+```bash
+deepspider agent --port 3080 --verbose
 ```
 
-使用 `Ctrl+C` 会同时停止 TUI、DeepSpider MCP 和 OpenCode Server。
+DSH Web 会加载 DeepSpider Spider Preset。为目标建立一个 Session，写明请求触发路径和预期交付物，并用 Goals 跟踪八阶段进度；随后直接要求得到经验证的 Python 或 JavaScript 请求实现。按 `Ctrl+C` 会停止 DSH Web，并清理当前 Agent 的 DeepSpider 运行时。
 
 ## 使用方式
 
-### 1. 独立 Agent
+| 命令 | 用途 |
+| --- | --- |
+| `deepspider agent [--port <number>] [--verbose]` | 启动原生 DSH Web 和 Spider Preset |
+| `deepspider mcp` | 启动 stdio MCP 外部适配器 |
+| `deepspider fetch <url>` | 通过 CycleTLS 发起一次轻量 HTTP 请求 |
+| `deepspider update` | 检查并更新全局安装 |
+| `deepspider --version` | 显示版本 |
+| `deepspider --help` | 显示帮助 |
 
-```bash
-# 使用沙箱默认模型
-deepspider agent
+### Agent
 
-# 临时覆盖本次运行的模型
-deepspider agent --model deepseek/deepseek-chat
+在 DSH Web 中可以同时维护多个 Session。每个 Session 由独立的 DeepSpider 运行时承载，Goals 用于追踪当前逆向任务；Code Mode 将工具使用集中到可检查的代码执行中。模型选择、provider 凭据和登录状态由 DSH 管理。
 
-# 查看详细启动日志
-deepspider agent --verbose
-```
-
-Agent 启动时会检查 OpenCode、Spider Agent、DeepSpider Skill、Plugin 工具和 MCP 连接；全部就绪后才进入 TUI。
-
-### 2. MCP Server
-
-全局安装后，可以把 DeepSpider 注册到 Claude Code：
-
-```bash
-claude mcp add deepspider deepspider-mcp
-```
-
-也可以直接启动 stdio MCP Server：
+### MCP 外部适配器
 
 ```bash
 deepspider mcp
 ```
 
-### 3. 轻量 HTTP 请求
+MCP 是给外部 MCP 客户端连接 DeepSpider 工具目录的 stdio 适配器。它为每个进程创建独立身份；需要 Agent Session 的浏览器与逆向工具应通过 DSH Web 使用。
+
+### 轻量 HTTP 请求
 
 ```bash
 deepspider fetch https://httpbin.org/get
 ```
 
-`fetch` 使用 CycleTLS 完成一次 HTTP 请求，不启动 Patchright，也不进入 Agent 工作流。
+`fetch` 使用 CycleTLS 完成一次 HTTP 请求，不启动 Patchright Chromium，也不进入 Agent 工作流。
 
-## OpenCode 配置
-
-DeepSpider 不再维护另一套模型和 provider 配置。相关配置由 OpenCode 管理，并隔离在：
-
-```text
-~/.deepspider/opencode-sandbox/
-├── config/opencode/opencode.json
-├── data/opencode/auth.json
-├── cache/
-└── state/
-```
-
-常用命令：
+### 更新与帮助
 
 ```bash
-# 登录 provider / 查看登录状态
-deepspider config auth login
-deepspider config auth list
-
-# 设置默认模型
-deepspider config set-model anthropic/claude-sonnet-4-5
-
-# 查看当前配置和沙箱位置
-deepspider config list
-deepspider config path
-
-# 清理沙箱，下次启动重新初始化
-deepspider config reset
+deepspider update
+deepspider --help
 ```
-
-复杂的 provider、base URL 等设置直接写入沙箱内的 `opencode.json`，格式与 OpenCode 原生配置一致。DeepSpider 不会把项目级 OpenCode 配置混入这套沙箱。
 
 ## 八阶段逆向工作流
 
@@ -157,11 +118,11 @@ intake → evidence → locate → recover → runtime → extraction → valida
 | validation | 用多组输入对比 Node、Python 和真实请求 | `verification-record.md` |
 | handoff | 整理并生成可运行交付物 | Python 爬虫项目与配置 |
 
-DeepSpider 的证据门要求在分析前完成四件事：打开目标页面、执行触发操作、捕获真实请求、读取完整请求与响应。后续结论必须能回到这些证据，而不是从参数名称猜算法。
+证据门要求在分析前完成四件事：打开目标页面、执行触发操作、捕获真实请求、读取完整请求与响应。后续结论必须能回到这些证据，而不是从参数名称猜算法。
 
 ### 补环境运行时
 
-目标脚本依赖浏览器环境时，先调用 `list_scripts` 获取当前捕获会话的精确 `scriptId`，再通过 `export_rebuild_bundle` 导出任务目录。`manifest.json` 记录会话 ID、脚本 ID 和 `target.js` 的 SHA-256；目标脚本字节发生变化时，Runner 会拒绝执行。
+目标脚本依赖浏览器环境时，先调用 `list_scripts` 获取当前捕获 Session 的精确 `scriptId`，再通过 `export_rebuild_bundle` 导出任务目录。`manifest.json` 记录 Session ID、脚本 ID 和 `target.js` 的 SHA-256；目标脚本字节发生变化时，Runner 会拒绝执行。
 
 ```bash
 node ~/.deepspider/rebuild/<task-id>/runner.mjs --mode probe
@@ -171,8 +132,6 @@ node ~/.deepspider/rebuild/<task-id>/runner.mjs --mode verify
 - `probe` 注入观测 Hook，记录环境访问、源码完整性检查、Node 特征检测和动态代码，结果用于形成假设。
 - `verify` 不加载 Probe，只运行 `env.js`、原始 `target.js` 和入口表达式；通过该模式复现的结果才进入验证记录。
 - 补环境只修改 `env.js` 和 `probe.js`。`target.js` 与 `dynamic/` 中保存的动态源码保持原样。
-
-每次运行都会记录 session、script、target、captured environment、`env.js`、`probe.js` 和 Runner 身份。Probe 运行后可调用 `analyze_runtime_trace` 分析指定 run 的 `trace.ndjson`，再根据真实缺口调整环境实现。
 
 ## MCP 工具能力
 
@@ -185,116 +144,111 @@ node ~/.deepspider/rebuild/<task-id>/runner.mjs --mode verify
 | Script | 脚本列表、源码读取、跨脚本搜索 |
 | Debugger | 断点、调用栈、单步执行、变量求值、logpoint |
 | Hook | 注入 Hook、读取和搜索运行时采样数据 |
-| Capture | 收集环境对象及其属性 |
+| Capture | 收集浏览器环境对象及其属性 |
 | Rebuild | 导出不可变目标 bundle、Probe/Verify 运行、Trace 分析 |
 | Stealth | 控制反调试拦截 |
 
-这些工具既可以由内置 Spider Agent 自动编排，也可以通过 MCP 客户端直接调用。
+Cordis 动态工具可以在 Agent 被授予的环境中执行操作，属于高权限能力。只应在可信任务中使用，并在执行前确认目标、文件和命令范围。
 
 ## 架构
 
 ```text
 DeepSpider CLI
-├── Agent
-│   └── OpenCode V2 Runtime
-│       ├── Spider Agent + DeepSpider Skill
-│       ├── 八阶段工作流 + 官方 OpenCode TUI
-│       └── DeepSpider Plugin + MCP
-│           └── Patchright + CDP + DataStore
-├── MCP Server（stdio）
+├── agent
+│   └── DSH Web
+│       ├── Spider Preset：多个 Sessions、Goals、Code Mode
+│       ├── Cordis 动态工具 + DeepSpider Agent 工具目录
+│       └── DeepSpider Runtime
+│           └── Patchright Chromium + CDP + DataStore
+├── mcp（stdio 外部适配器）
 │   └── 51 个浏览器与逆向工具
 └── fetch
     └── CycleTLS
 ```
 
-Agent 的工作目录就是启动命令时的当前目录，因此生成的项目和本地文件操作都围绕用户当前工程进行。DeepSpider 安装目录只负责提供内置 Agent、Skill、Plugin、MCP Server 和固定版本的 OpenCode Runtime。
+每个 Agent Session 的运行时根目录由 Session ID 的 SHA-256 得到，允许不同 Session 并行，同时隔离浏览器数据与交付物。
 
 ## 项目结构
 
 ```text
 deepspider/
 ├── bin/cli.js                  # CLI 入口
-├── agents/spider.md            # Spider Agent 定义
+├── dsh/                        # DSH Patch 与 Spider Preset
 ├── skills/deepspider/          # 八阶段技能、模板与渐进式参考资料
-├── plugins/deepspider-plugin/  # OpenCode Plugin
 ├── src/
-│   ├── agent/                  # OpenCode 沙箱、Runtime 与 TUI
-│   ├── browser/                # Patchright、CDP、采集器与拦截器
-│   ├── mcp/                    # MCP Server 与 51 个工具
+│   ├── dsh/                    # DSH Web 启动与 Host/Agent 插件
+│   ├── runtime/                # Session 隔离的 DeepSpider Runtime
+│   ├── browser/                # Patchright Chromium、CDP、采集器与拦截器
+│   ├── mcp/                    # MCP 外部适配器与 51 个工具
 │   ├── store/                  # 请求、响应、脚本与知识存储
-│   ├── env/                    # 浏览器环境采集与补环境模块
-│   └── cli/                    # config、fetch、update 等命令
+│   └── env/                    # 浏览器环境采集与补环境模块
 ├── scripts/                    # 测试与发布 smoke 脚本
 └── test/                       # 单元测试和真实集成测试
 ```
 
 ## 从源码运行
 
+开发环境使用 Node.js `>=24.0.0` 和 pnpm `11.21.0`：
+
 ```bash
 git clone https://github.com/ma-pony/deepspider.git
 cd deepspider
 pnpm install
 
-node bin/cli.js agent
+node bin/cli.js agent --port 3080 --verbose
 node bin/cli.js --help
 ```
 
-源码模式下，也可以把文档中的 `deepspider` 替换成 `node bin/cli.js`：
+源码模式下，表中的 CLI 命令可将 `deepspider` 替换成 `node bin/cli.js`：
 
 ```bash
-node bin/cli.js config auth login
-node bin/cli.js config set-model anthropic/claude-sonnet-4-5
+node bin/cli.js mcp
 node bin/cli.js fetch https://httpbin.org/get
+node bin/cli.js update
+node bin/cli.js --version
 ```
 
-可选的 Python 密码学环境：
-
-```bash
-pnpm setup:crypto
-```
-
-## 环境变量与数据目录
+## 环境变量与 Session 产物
 
 浏览器运行时支持两个环境变量：
 
 ```bash
-# 无头模式，默认 false
 export DEEPSPIDER_HEADLESS=true
-
-# 可选：复用指定的浏览器 profile
 export DEEPSPIDER_USER_DATA_DIR=/absolute/path/to/browser-profile
 ```
 
 DeepSpider 不会自动加载项目根目录的 `.env`。持久化 profile 可能包含登录态，只应使用权限受控的可信目录。
 
-主要数据保存在 `~/.deepspider/`：
+每个 Agent Session 的产物保存在：
 
 ```text
-~/.deepspider/
-├── opencode-sandbox/       # OpenCode 配置、凭据、缓存和状态
-├── data/sites/             # 按站点保存的请求、响应和脚本证据
-├── store/                  # 本地知识与模式数据
-├── output/                 # 报告、算法、截图和爬虫交付物
-├── rebuild/                # 不可变目标 bundle、运行结果与 Trace
-└── browser-data/           # 可选的浏览器持久化数据
+~/.deepspider/sessions/<sha256(agent.id)>/
+├── metadata/
+├── data/
+├── output/
+├── rebuild/
+├── screenshots/
+└── browser-data/
 ```
+
+Session 被 DSH 销毁或按 `Ctrl+C` 停止时，对应 DeepSpider Runtime 会关闭并释放浏览器资源。不要手动合并不同 Session 的 `browser-data/`。
 
 ## 开发与验证
 
 ```bash
 pnpm test              # 单元测试
 pnpm lint              # ESLint
-pnpm test:integration  # OpenCode 与真实 Chromium 集成测试
+pnpm test:integration  # DSH 与真实 Patchright Chromium 集成测试
 pnpm smoke:pack        # 打包后空目录安装验证
 npm pack --dry-run     # 查看 npm 发布清单
 ```
 
 浏览器集成测试需要 Patchright Chromium，并要求运行环境允许启动本地 headless Chromium 子进程。
 
-## 当前边界
+## 安全与授权
 
-- LLM provider、模型和登录凭据由 OpenCode 管理，DeepSpider 不内置任何账号。
-- 代理池、验证码识别和任务调度不是当前版本已交付的内置能力。
+- DSH 持有模型、provider 凭据和登录状态；DeepSpider 不内置任何账号。
+- Cordis 动态工具具备高权限执行能力，仅对可信的目标和任务使用。
 - 请只分析自己拥有或获得授权的目标，并遵守目标站点条款和适用法律。
 
 ## License

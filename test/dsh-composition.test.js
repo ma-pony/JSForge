@@ -31,6 +31,25 @@ function flattenRows(rows) {
   return rows.flatMap((row) => [row, ...(Array.isArray(row.config) ? flattenRows(row.config) : [])])
 }
 
+const readmes = ['README.md', 'README_EN.md'].map((file) => ({
+  file,
+  content: fs.readFileSync(path.join(projectRoot, file), 'utf8'),
+}))
+
+test('both READMEs document the native DSH workflow and current command surface', () => {
+  for (const { file, content } of readmes) {
+    assert.match(content, /agent \[--port <number>\] \[--verbose\]/, file)
+    ;['deepspider mcp', 'deepspider fetch', 'deepspider update', 'deepspider --version', 'deepspider --help'].forEach((command) => {
+      assert.match(content, new RegExp(command), `${file} must document ${command}`)
+    })
+    ;['DSH Web', 'Session', 'Goal', 'Code Mode', 'Cordis', 'Patchright Chromium', '>=24.0.0', '11.21.0'].forEach((term) => {
+      assert.match(content, new RegExp(term), `${file} must document ${term}`)
+    })
+    assert.match(content, /~\/\.deepspider\/sessions\//, `${file} must document session artifacts`)
+    assert.doesNotMatch(content, /OpenCode|opencode|\bTUI\b|deepspider config/i, `${file} must not contain retired instructions`)
+  }
+})
+
 test('Spider Preset exposes only the approved general and DeepSpider capabilities', () => {
   const presetRoot = path.join(projectRoot, 'dsh', 'agent-presets', 'spider')
   const metadata = loadYaml(path.join(presetRoot, 'preset.yml'))

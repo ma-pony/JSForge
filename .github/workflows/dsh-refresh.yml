@@ -1,0 +1,33 @@
+name: DSH compatibility drift
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Refresh DSH packages in this ephemeral checkout
+        run: pnpm update @deepseek-ai/dsh@latest @deepseek-ai/cordis@latest @deepseek-ai/dsh-tools@next
+      - run: pnpm test
+      - run: pnpm lint
+      - run: pnpm test:integration
+      - run: pnpm smoke:pack
+      - name: Report DSH lockfile drift
+        run: git diff -- pnpm-lock.yaml

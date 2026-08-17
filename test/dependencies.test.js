@@ -65,6 +65,28 @@ test('publish jobs use the Node floor and frozen script-free installs', () => {
     (workflow.match(/pnpm install --frozen-lockfile --ignore-scripts/g) || []).length,
     2
   )
+  assert.match(workflow, /- run: pnpm test:integration/)
+})
+
+test('DSH refresh workflow reports dependency drift through the full release gate', () => {
+  const workflow = fs.readFileSync(
+    new URL('../.github/workflows/dsh-refresh.yml', import.meta.url),
+    'utf8'
+  )
+
+  assert.match(workflow, /schedule:/)
+  assert.match(workflow, /workflow_dispatch:/)
+  assert.match(workflow, /node-version: '24'/)
+  assert.match(workflow, /version: 11\.21\.0/)
+  assert.match(
+    workflow,
+    /pnpm update @deepseek-ai\/dsh@latest @deepseek-ai\/cordis@latest @deepseek-ai\/dsh-tools@next/
+  )
+  ;['pnpm test', 'pnpm lint', 'pnpm test:integration', 'pnpm smoke:pack'].forEach((command) => {
+    assert.match(workflow, new RegExp(`- run: ${command.replace(':', '\\:')}`))
+  })
+  assert.match(workflow, /git diff -- pnpm-lock\.yaml/)
+  assert.doesNotMatch(workflow, /\b(?:git commit|git push|gh pr|npm publish)\b/i)
 })
 
 test('unit script uses the platform-independent top-level test runner', () => {
