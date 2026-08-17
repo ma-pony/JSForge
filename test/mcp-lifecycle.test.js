@@ -97,8 +97,24 @@ test('stdio shutdown closes the exact synthetic MCP Runtime through RuntimeManag
   stdin.emit('end')
 
   assert.equal(await exited, 0)
-  assert.deepEqual(owners, [{ id: 'mcp-stdio' }])
+  assert.match(owners[0].id, /^mcp-/)
   assert.equal(owners[0], context.agent)
   assert.deepEqual(closes, ['stdio shutdown'])
   assert.equal(manager.entries.size, 0)
+})
+
+test('MCP contexts use process-unique generated identities while preserving explicit test IDs', () => {
+  const values = ['first-uuid', 'second-uuid']
+  const randomUUIDFn = () => values.shift()
+  const first = mcpContextModule.createMcpContext({ randomUUIDFn })
+  const second = mcpContextModule.createMcpContext({ randomUUIDFn })
+  const explicit = mcpContextModule.createMcpContext({
+    sessionId: 'test-session',
+    randomUUIDFn: () => 'unused-uuid',
+  })
+
+  assert.equal(first.agent.id, 'mcp-first-uuid')
+  assert.equal(second.agent.id, 'mcp-second-uuid')
+  assert.notEqual(first.agent.id, second.agent.id)
+  assert.equal(explicit.agent.id, 'test-session')
 })

@@ -4,20 +4,10 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { registerRebuildTools } from '../src/mcp/tools/rebuild.js'
+import { tools as rebuildTools } from '../src/tools/groups/rebuild.js'
 
-function fakeServer() {
-  const tools = new Map()
-  return {
-    tools,
-    tool(name, description, schema, handler) {
-      tools.set(name, { description, schema, handler })
-    },
-  }
-}
-
-function textResult(result) {
-  return JSON.parse(result.content[0].text)
+function definition(name) {
+  return rebuildTools.find((tool) => tool.name === name)
 }
 
 test('exports an immutable bundle from an exact current-session script ID', async () => {
@@ -43,29 +33,28 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
       return source
     },
   }
-  const server = fakeServer()
-  registerRebuildTools(server, {
-    rebuildDir,
-    getStore: () => store,
-    getPageUrl: async () => 'https://example.com/page',
-    collectPageData: async () => pageData,
-    buildEnvironment: () => 'globalThis.window = globalThis;\n',
-  })
-
-  assert.deepEqual([...server.tools.keys()].sort(), ['analyze_runtime_trace', 'export_rebuild_bundle'])
-  const exportTool = server.tools.get('export_rebuild_bundle')
-  assert.ok(exportTool.schema.scriptId)
-  assert.equal(exportTool.schema.scriptUrl, undefined)
-
-  const result = await exportTool.handler({
+  const runtime = {
+    dataStore: store,
+    paths: { rebuild: rebuildDir },
+    async getPage() {
+      return {
+        url: () => 'https://example.com/page',
+        async evaluate(_expression, args) {
+          if (args?.path === 'navigator' || args?.path === 'screen') {
+            return { success: true, data: { properties: {} } }
+          }
+          return {}
+        },
+      }
+    },
+  }
+  const result = await definition('export_rebuild_bundle').execute(runtime, {
     taskId: 'fixture-task',
     scriptId: 'script-current',
     callExpression: 'window.answer',
-  })
-  const data = textResult(result)
+  }, undefined)
 
-  assert.equal(result.isError, undefined)
-  assert.equal(data.success, true)
+  assert.equal(result.success, true)
   assert.deepEqual(calls, [
     ['getScriptList', null, true],
     ['getScript', 'example.com', 'script-current'],
@@ -91,13 +80,14 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
   assert.equal(fs.statSync(taskDir).mode & 0o777, 0o700)
   assert.equal(fs.statSync(path.join(taskDir, 'target.js')).mode & 0o777, 0o600)
 
-  const duplicate = await exportTool.handler({
+  await assert.rejects(
+    definition('export_rebuild_bundle').execute(runtime, {
     taskId: 'fixture-task',
     scriptId: 'script-current',
     callExpression: 'window.answer',
-  })
-  assert.equal(duplicate.isError, true)
-  assert.match(textResult(duplicate).error, /already exists/)
+    }, undefined),
+    { code: 'E_REBUILD_EXISTS' },
+  )
 })
 
 test('analyzes a stored probe trace without permitting target modification', async () => {
@@ -108,25 +98,20 @@ test('analyzes a stored probe trace without permitting target modification', asy
     JSON.stringify({ category: 'runtime-timeout', path: 'target.js' }),
     JSON.stringify({ category: 'source-integrity', path: 'Function.prototype.toString' }),
   ].join('\n'))
-  const server = fakeServer()
-  registerRebuildTools(server, { rebuildDir })
-
-  const result = await server.tools.get('analyze_runtime_trace').handler({
+  const result = await definition('analyze_runtime_trace').execute({ paths: { rebuild: rebuildDir } }, {
     taskId: 'fixture-task',
     runId: 'run-1',
-  })
-  const data = textResult(result)
+  }, undefined)
 
-  assert.equal(data.category, 'source-integrity')
-  assert.equal(data.targetModificationAllowed, false)
+  assert.equal(result.category, 'source-integrity')
+  assert.equal(result.targetModificationAllowed, false)
 })
 
 test('rejects a truncated capture instead of signing partial bytes as the target', async () => {
   const rebuildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-truncated-'))
-  const server = fakeServer()
-  registerRebuildTools(server, {
-    rebuildDir,
-    getStore: () => ({
+  const runtime = {
+    paths: { rebuild: rebuildDir },
+    dataStore: {
       getSessionId: () => 'session-current',
       getScriptList: async () => [{
         id: 'script-truncated',
@@ -135,18 +120,13 @@ test('rejects a truncated capture instead of signing partial bytes as the target
         truncated: true,
       }],
       getScript: async () => 'partial source',
-    }),
-    getPageUrl: async () => 'https://example.com/',
-    collectPageData: async () => ({}),
-    buildEnvironment: () => '',
-  })
+    },
+    async getPage() { return { url: () => 'https://example.com/' } },
+  }
 
-  const result = await server.tools.get('export_rebuild_bundle').handler({
+  await assert.rejects(definition('export_rebuild_bundle').execute(runtime, {
     taskId: 'truncated-task',
     scriptId: 'script-truncated',
-  })
-
-  assert.equal(result.isError, true)
-  assert.equal(textResult(result).code, 'E_SCRIPT_TRUNCATED')
+  }, undefined), { code: 'E_SCRIPT_TRUNCATED' })
   assert.equal(fs.existsSync(path.join(rebuildDir, 'truncated-task')), false)
 })

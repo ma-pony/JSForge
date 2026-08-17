@@ -7,21 +7,11 @@ import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { chromium } from 'patchright'
-import { tools as browserTools } from '../../src/tools/groups/browser.js'
-import { tools as debuggerTools } from '../../src/tools/groups/debugger.js'
-import { tools as hookTools } from '../../src/tools/groups/hook.js'
-import { tools as networkTools } from '../../src/tools/groups/network.js'
-import { tools as stealthTools } from '../../src/tools/groups/stealth.js'
+import { DEEPSPIDER_TOOL_COUNT, deepSpiderCatalog } from '../../src/tools/index.js'
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const PATCHRIGHT_BROWSER_CACHE = findBrowserCache(chromium.executablePath())
-const MIGRATED_NAMES = [
-  ...browserTools,
-  ...networkTools,
-  ...debuggerTools,
-  ...hookTools,
-  ...stealthTools,
-].map(({ name }) => name)
+const CATALOG_NAMES = deepSpiderCatalog.map(({ name }) => name)
 
 test('MCP browser tool opens a local page', { timeout: 30000 }, async () => {
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-browser-smoke-'))
@@ -41,8 +31,8 @@ test('MCP browser tool opens a local page', { timeout: 30000 }, async () => {
     await client.connect(transport)
     const registered = await client.listTools()
     const registeredNames = registered.tools.map(({ name }) => name)
-    assert.equal(registeredNames.length, 51)
-    for (const name of MIGRATED_NAMES) {
+    assert.equal(registeredNames.length, DEEPSPIDER_TOOL_COUNT)
+    for (const name of CATALOG_NAMES) {
       assert.equal(registeredNames.filter((candidate) => candidate === name).length, 1, name)
     }
     const result = await client.callTool({

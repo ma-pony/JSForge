@@ -1,5 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import {
   createToolCatalog,
@@ -14,6 +16,7 @@ import { tools as debuggerTools } from '../src/tools/groups/debugger.js'
 import { tools as hookTools } from '../src/tools/groups/hook.js'
 import { tools as networkTools } from '../src/tools/groups/network.js'
 import { tools as stealthTools } from '../src/tools/groups/stealth.js'
+import { DEEPSPIDER_TOOL_COUNT, deepSpiderCatalog } from '../src/tools/index.js'
 
 const BROWSER_FACING_CONTRACTS = [
   ['navigate_page', {
@@ -303,6 +306,44 @@ test('browser-facing groups expose the complete frozen public name and parameter
     assert.equal(Object.isFrozen(definition.parameters), true)
     assert.equal(definition.execute.length, 3)
   }
+})
+
+test('the central catalog has the exact 51-tool stable group contract', () => {
+  const names = deepSpiderCatalog.map(({ name }) => name)
+
+  assert.equal(DEEPSPIDER_TOOL_COUNT, 51)
+  assert.equal(deepSpiderCatalog.length, DEEPSPIDER_TOOL_COUNT)
+  assert.equal(new Set(names).size, DEEPSPIDER_TOOL_COUNT)
+  assert.deepEqual(
+    deepSpiderCatalog.slice(0, BROWSER_FACING_CONTRACTS.length)
+      .map(({ name, parameters }) => [name, parameters]),
+    BROWSER_FACING_CONTRACTS,
+  )
+  assert.deepEqual(names.slice(BROWSER_FACING_CONTRACTS.length), [
+    'list_scripts',
+    'get_script_source',
+    'find_in_script',
+    'collect_env',
+    'collect_property',
+    'export_rebuild_bundle',
+    'analyze_runtime_trace',
+  ])
+  assert.equal(names.includes('evolve_skill'), false)
+  for (const definition of deepSpiderCatalog) {
+    assert.equal(Object.isFrozen(definition), true)
+    assert.equal(Object.isFrozen(definition.parameters), true)
+    assert.equal(definition.execute.length, 3)
+  }
+})
+
+test('MCP registers the central catalog through its sole registration path', () => {
+  const serverPath = fileURLToPath(new URL('../src/mcp/server.js', import.meta.url))
+  const source = readFileSync(serverPath, 'utf8')
+
+  assert.match(source, /import\s+\{\s*deepSpiderCatalog\s*\}\s+from\s+'\.\.\/tools\/index\.js'/)
+  assert.equal((source.match(/registerMcpCatalog\(/g) || []).length, 1)
+  assert.match(source, /registerMcpCatalog\(server, deepSpiderCatalog, \{\s*runtimeManager,\s*agent: context\.agent\s*\}\)/)
+  assert.doesNotMatch(source, /register(?:Script|Capture|Rebuild)Tools/)
 })
 
 test('representative browser-facing handlers use the supplied Runtime and operation signal', async () => {

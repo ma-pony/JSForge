@@ -1,7 +1,14 @@
+import { randomUUID } from 'node:crypto'
+
 import { RuntimeManager } from '../runtime/RuntimeManager.js'
 
-export function createMcpContext({ sessionId = 'mcp-stdio', runtimeManager } = {}) {
-  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+export function createMcpSessionId(randomUUIDFn = randomUUID) {
+  return `mcp-${randomUUIDFn()}`
+}
+
+export function createMcpContext({ sessionId, randomUUIDFn, runtimeManager } = {}) {
+  const resolvedSessionId = sessionId === undefined ? createMcpSessionId(randomUUIDFn) : sessionId
+  if (typeof resolvedSessionId !== 'string' || resolvedSessionId.length === 0) {
     throw new TypeError('sessionId must be a non-empty string')
   }
   if (runtimeManager != null && !(runtimeManager instanceof RuntimeManager)) {
@@ -9,7 +16,7 @@ export function createMcpContext({ sessionId = 'mcp-stdio', runtimeManager } = {
   }
 
   const manager = runtimeManager || new RuntimeManager()
-  const agent = { id: sessionId }
+  const agent = { id: resolvedSessionId }
   const getRuntime = () => manager.get(agent)
 
   return Object.freeze({
@@ -41,9 +48,6 @@ export function createMcpContext({ sessionId = 'mcp-stdio', runtimeManager } = {
     async clearActiveFrameContext() {
       const runtime = await getRuntime()
       runtime.clearActiveFrameContext()
-    },
-    async getDataStore() {
-      return (await getRuntime()).dataStore
     },
     cleanup(reason) {
       return manager.closeAll(reason)
