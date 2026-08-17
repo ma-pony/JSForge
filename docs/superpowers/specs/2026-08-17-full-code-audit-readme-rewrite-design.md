@@ -1,132 +1,256 @@
-# DeepSpider Full Code Audit and README Rewrite Design
+# DeepSpider Environment Rebuild, Code Audit, and README Design
 
 ## Context
 
-DeepSpider has completed its native DSH migration. The current product surface is DSH Web with the Spider Preset, a Session-owned Patchright/CDP runtime, a shared 51-tool catalog, and an MCP external adapter. The repository now needs a complete production-code audit and a bilingual README rewrite based on the implemented release rather than migration history.
+DeepSpider is now a native DSH JavaScript reverse-engineering platform with Session-owned Patchright/CDP runtimes, a shared tool catalog, and MCP as an external adapter. The remaining work is not a small cleanup: the environment-rebuild path still treats one instrumented Patchright page as browser truth, flattens that data into low-fidelity handwritten shims, and leaves the active browser Dialog disconnected from the DSH Session.
 
-The audit is corrective, not a broad modernization project. It fixes confirmed correctness, dependency, release, metadata, and dead-code problems while preserving the validated DSH lifecycle and reverse-engineering workflow.
+This design replaces that path with a small evidence-driven system inspired by sdenv's useful ideas: a mature DOM substrate, composable handlers, runtime concealment, and record/replay. It does not directly depend on `sdenv` or `sdenv-jsdom`.
 
 ## Goals
 
-- Review every published production area: CLI, DSH composition, Runtime ownership, browser/CDP lifecycle, DataStore, rebuild runtime, adapters, tool catalog, package metadata, CI, and release contents.
-- Fix deterministic problems found by the audit.
-- Remove production modules proven unreachable from the current CLI, DSH, MCP, tool, and test entry points.
-- Refresh direct dependencies and the lockfile through supported package-manager operations.
-- Rewrite `README.md` and `README_EN.md` around the current product and keep their structure equivalent.
-- Preserve the reverse-engineering narrative and eight-stage method.
-- Finish with unit, lint, dependency-audit, real integration, packed-install, and dry-pack evidence.
+- Keep browser automation as an evidence source while making offline reconstruction the completion criterion.
+- Separate clean browser assumptions, current Session state, instrumented Probe data, and explicit site rules.
+- Replace handwritten DOM and fake Web API shims with upstream jsdom plus DeepSpider-controlled handlers.
+- Allow fixed fingerprints, known jsdom/Node concealment, site-specific rules, and traceable derived-source edits when they are the simplest reliable solution.
+- Preserve the original captured script and all evidence.
+- Make the existing in-page Dialog usable for element selection and conversation with the owning DSH Agent.
+- Remove obsolete environment and UI implementations only after their required capabilities have replacements.
+- Finish the repository audit and rewrite the Chinese and English READMEs against the implemented product.
 
-## Non-goals
+## Product Invariants
 
-- Do not split large but working modules merely to reduce file size.
-- Do not add Camoufox or a second browser runtime.
-- Do not restore OpenCode compatibility or retired Agent paths.
-- Do not change the 51-tool public contract without a confirmed correctness defect.
-- Do not add compatibility aliases for deleted internal modules.
-- Do not treat `node:vm` as a complete hostile-code security sandbox.
+- The Agent performs reverse analysis. A value obtained only by driving the browser is evidence, not the finished reconstruction.
+- The original captured source is immutable. A separate working copy may be transformed with a recorded diff and hashes.
+- No evidence source is universal truth. Explicit site rules may override generated defaults.
+- Common rules must not route on a named anti-bot vendor. Per-site recipes are allowed.
+- Browser, evidence, recipe, Dialog, and rebuild artifacts remain isolated by DSH Session.
+- Browser shutdown remains owned by the Session Runtime and DSH Host lifecycle.
 
 ## Preserved Browser Behavior
 
-`BrowserClient` intentionally keeps the reverse-analysis launch configuration:
+`BrowserClient` intentionally keeps:
 
 - `--disable-web-security`;
 - `--ignore-certificate-errors`;
 - `ignoreHTTPSErrors: true`.
 
-This audit does not add a safe-mode switch or change these defaults. The README will describe DeepSpider as a privileged analysis environment intended for authorized targets.
+This work does not add a safe mode or change those defaults.
 
-## Code Audit Design
+## Architecture
 
-### 1. Browser evidence reliability
+```text
+Fixed Chrome Baseline ----\
+Observe Session -----------+--> Environment Recipe --> jsdom Realm
+Probe Session -------------+          |                    |
+DataStore Replay ----------+          |                    +--> Probe / Trace
+Explicit Site Rules -------/          |                    |
+Derived Source Transforms -----------/                     +--> Offline Verify
+```
 
-Browser startup must fail when page setup, CDP initialization, Runtime binding, or required interceptor startup fails. Logging and continuing would create a browser that appears usable while silently missing request or script evidence.
+### Evidence sources
 
-Tests will inject a setup failure and prove `launch()` rejects and releases partially created browser resources. Popup-specific behavior may continue to log a page-local failure, but the initial Session browser cannot report success without its evidence pipeline.
+DeepSpider uses three practical evidence classes:
 
-### 2. Dead-code and unfinished-feature decisions
+1. `baseline`: a tested fixed Chrome profile and known browser/runtime rules;
+2. `session`: page-specific URL, document, cookies, storage, scripts, requests, and responses from the current Patchright Session;
+3. `probe`: instrumented observations collected only after the target has been captured.
 
-An internal module is deleted only after repository-wide import, textual-reference, history, Skill-contract, and replacement-path checks establish whether it is obsolete or an unfinished required capability.
+Explicit Recipe rules have the highest priority. No confidence-scoring engine or multi-browser profile matrix is required.
 
-The audit produced these decisions:
+### Browser modes
 
-- Delete `src/core/PatchGenerator.js`. It belongs to the former global knowledge-library and error-text patch-generation path. The current contract intentionally replaced that path with exact browser facts, `collect_property`, immutable `target.js`, Trace analysis, and edits limited to `env.js` / `probe.js`. Reconnecting it would reintroduce unscoped, potentially stale environment code.
-- Delete `src/store/Store.js`. Its only production consumer is `PatchGenerator`; no current tool, Skill, Session workflow, or learned-reference path writes or reads its JSON knowledge library. Reusable guidance now lives in the packaged Skill and evidence-backed Session artifacts.
-- Delete standalone `src/browser/ui/selector.js` and `src/browser/ui/confirmDialog.js` after final reference checks. They are early UI prototypes with no tool registration, no DSH surface, and no default-hook assembly. If manual visual selection is required later, it must be implemented as an explicit Session-scoped tool with a result contract.
-- Keep `src/browser/ui/analysisPanel.js` and `src/browser/defaultHooks.js`. They remain in the active browser injection chain.
-- Reduce `src/config/paths.js` rather than delete it. Keep the used directory-permission and filename helpers; remove the obsolete process-global data, store, output, report, and browser-data tree. `SessionPaths` remains the only owner of Runtime artifact roots.
-- Delete `src/config/index.js` if the final reference check confirms it only re-exports the removed global path surface.
+The Browser Runtime exposes four modes:
 
-Comments and tests referring to the deleted route will be updated. No compatibility aliases will be added.
+- `observe`: default; no page JavaScript injection, with CDP network/script capture;
+- `interactive`: installs the Dialog bridge and UI on demand;
+- `probe`: installs the analysis Hook set for an explicit investigation;
+- `none`: truly no init script or Runtime binding.
 
-### 3. Dependency and release hygiene
+The current `none` behavior that still injects collectors and the panel is removed. `DeepSpiderRuntime` starts in `observe`, not `full`.
 
-Use pnpm 11.21.0 to refresh the direct runtime dependencies and regenerate the lockfile. Prefer upstream releases that naturally resolve vulnerable transitive packages. Do not add speculative overrides when the current upstream release still owns the dependency.
+Initial page setup is fail-fast. Failure to create the CDP session or start required evidence interceptors rejects browser launch and releases partial resources.
 
-After refresh:
+## Environment Recipe
 
-- run `pnpm audit --prod`;
-- fix high-severity findings that are resolvable through supported direct dependency updates;
-- report any remaining upstream-only advisory with its dependency path;
-- keep the DSH channel policy: DSH and Cordis on `latest`, DSH tools on `next`;
-- retain the scheduled DSH compatibility workflow and add production-audit coverage to release gates if the refreshed graph can pass it reliably.
+Each rebuild task owns `recipe.json` with these sections:
 
-### 4. Product metadata and CLI text
+```json
+{
+  "baseline": "chrome-default",
+  "fixedValues": {},
+  "conceal": [],
+  "handlers": {},
+  "replay": {},
+  "sourceTransforms": [],
+  "assertions": []
+}
+```
 
-Package metadata and the default CLI help must identify DeepSpider as a DSH-native JavaScript reverse-engineering platform. MCP remains a generic external adapter rather than the primary product or a Claude Code-specific identity.
+Supported rule actions are deliberately small:
 
-The command contract stays unchanged:
+- `hide`;
+- `undefined`;
+- `throw`;
+- `replace`;
+- `fixed`;
+- `mask`;
+- `hook`;
+- `replay`.
 
-- `agent [--port <number>] [--verbose]`;
-- `mcp`;
-- `fetch <url>`;
-- `update`;
-- `--version`;
-- `--help`.
+Known concealment covers confirmed Node, jsdom, runner, and DeepSpider artifacts. A hidden property must behave consistently for direct access, `in`, own-key enumeration, and descriptor inspection. Probe discovers additional mismatches, and the Agent writes them into the current Recipe. Repeated useful rules may later be promoted to the baseline, but no automatic global-learning system is part of this work.
 
-Unused option plumbing and the three current lint warnings will be removed at their source rather than suppressed.
+## jsdom Realm and Handlers
 
-## README Design
+Use the current upstream jsdom release rather than the sdenv fork. Raise the project Node floor to the minimum required by that release when the dependency is added.
 
-The two READMEs target reverse engineers who want a working Agent first and contributors who need the runtime contract second. They will share the same section order and factual claims, with natural Chinese and English rather than sentence-by-sentence translation.
+jsdom supplies DOM, Event, HTML parsing, URL, Storage, and Cookie behavior. DeepSpider handlers supply the Chrome-specific and replayable surface:
 
-Target structure:
+- Window, Navigator, Plugins, MimeTypes, Screen, Viewport, and `window.chrome`;
+- Function metadata, native-source masking, prototypes, descriptors, brands, and error stacks;
+- Date, timers, Performance, randomness, and Crypto sequences;
+- fetch, XHR, Cookie, and Storage replay;
+- basic Canvas, WebGL, media, CSSOM, and Worker surface required by common detection.
 
-1. Product statement: real browser evidence to direct-request implementation.
-2. Why DeepSpider: evidence chain, protected-script analysis, immutable target, verified delivery.
-3. Quick start with the DSH Web Agent.
-4. Eight-stage workflow and evidence gate.
-5. Probe/Verify environment-rebuild contract.
-6. DSH multi-Session architecture and ownership boundaries.
-7. The eight groups behind the 51-tool catalog.
-8. CLI, MCP external adapter, and lightweight `fetch`.
-9. Session artifact layout.
-10. Development, release verification, and authorization boundary.
+The first implementation does not attempt complete browser emulation, a custom jsdom fork, native Canvas, or native `document.all`. A site Recipe may fix or hook unsupported behavior. A jsdom patch is justified later only when an observed site check cannot be handled outside the library.
 
-The rewrite will:
+The Realm runs in the rebuild runner process, never in the DSH Host process. Existing timeout, result hashing, dynamic-source integrity, stack filtering, and Node-escape regressions remain required.
 
-- keep Patchright Chromium as the supported browser runtime;
-- explain that browser automation gathers evidence and the deliverable is a direct request implementation;
-- distinguish DSH-owned Sessions, models, credentials, Goals, Code Mode, persistence, and compaction from DeepSpider-owned browser and reverse-engineering state;
-- describe Cordis as a privileged capability;
-- avoid migration history, retired capabilities, compatibility disclaimers, and duplicated usage sections;
-- avoid claiming unpublished tool behavior or unsupported environment variables.
+## Rebuild Artifacts
 
-After writing, both files will be scanned with the de-slop pattern catalog. Rewrites must remove negative-parallelism templates, inflated claims, repetitive three-item rhythms, uniform cadence, and redundant formatting without losing technical precision.
+The task layout becomes:
 
-## Testing and Acceptance
+```text
+rebuild/<task>/
+├── manifest.json
+├── target.original.js
+├── target.working.js        # only when transforms exist
+├── transforms.json
+├── recipe.json
+├── evidence/
+│   ├── baseline.json
+│   ├── session-state.json
+│   ├── property-facts.json
+│   └── network/
+├── runner.mjs
+└── runs/
+```
 
-The implementation is complete only when all of the following hold:
+The original target is never overwritten. A working target may remove debugger traps, expose an entry point, replace unavailable dynamic loading, add analysis logging, or fix a site-specific branch. Each transform records its reason and before/after hashes.
 
-- focused regressions demonstrate each production fix;
-- `pnpm test` passes;
-- `pnpm lint` reports zero errors and zero warnings;
-- `pnpm audit --prod` has no resolvable high-severity finding in the supported graph;
-- `pnpm test:integration` passes with real DSH Web and Patchright Chromium;
-- `pnpm smoke:pack` installs the generated tarball in an empty directory and validates the installed DSH layout;
-- `npm pack --dry-run --json` contains both READMEs, DSH assets, runtime sources, and the Skill, while excluding tests and removed legacy modules;
-- README contract tests prove bilingual command parity, required product terms, artifact paths, and absence of retired product instructions;
-- `git diff --check` passes and the tracked worktree contains only the intended audit and README changes.
+Generated `env.js` is optional build output, not an editable source of truth. `EnvironmentCompiler` consumes evidence plus Recipe and creates the Realm.
+
+## Probe, Trace, and Replay
+
+Probe reports more than missing properties. It records value, descriptor, owner, prototype, brand, function-shape, enumeration, stack, and call-sequence mismatches. Trace analysis returns concrete candidate Recipe rules instead of merely advising a manual patch.
+
+DataStore remains the Session evidence store and gains rebuild-facing replay queries. fetch/XHR use captured responses when a request matches. A miss emits Trace evidence; it does not return a fabricated empty `200` response. Date, random, Crypto, Cookie, and Storage may use recorded sequences or explicit fixed values.
+
+## Browser Dialog
+
+`analysisPanel.js` remains the single browser UI. It is refactored so it can install without the full Hook runtime and is injected only on request.
+
+The bridge supports:
+
+- element and iframe selection;
+- text editing and submission;
+- chat with the owning DSH Agent;
+- choices and confirmations;
+- Agent status and response rendering.
+
+`BrowserClient.onMessage` is connected to a Session-scoped bridge, and Agent output is sent back to the same page. Page switch and Runtime close remove listeners and UI state.
+
+The standalone `selector.js`, `confirmDialog.js`, and `panel.html` are deleted only after their useful behavior is covered by `analysisPanel.js` tests. The selection and conversation capability itself is retained.
+
+## DSH and Tool Contract
+
+The DSH system prompt states:
+
+- reverse analysis and offline verification are the goal;
+- browser output alone is insufficient;
+- Hook and Recipe repair are the default path;
+- fixed values, per-site rules, and recorded working-source transforms are allowed.
+
+Existing tools are evolved rather than adding a workflow platform:
+
+- `collect_env` reports collection mode and source;
+- `collect_property` keeps descriptor, owner, brand, prototype, and function-source facts;
+- `export_rebuild_bundle` writes separated evidence and an initial Recipe;
+- `analyze_runtime_trace` returns candidate Recipe rules;
+- one Dialog tool opens or closes the interactive panel.
+
+The published tool count is derived from the catalog and is not treated as an invariant.
+
+## Removal and Retention Decisions
+
+Delete after replacement:
+
+- `src/core/PatchGenerator.js`;
+- `src/store/Store.js`;
+- `src/env/modules/**`;
+- duplicate standalone browser UI prototypes;
+- unused process-global artifact paths and re-export modules.
+
+Retain and refactor:
+
+- `DataStore` as Session evidence and replay storage;
+- `analysisPanel` as the browser Dialog;
+- `BrowserClient`, `RuntimeManager`, and `SessionPaths`;
+- browser Hook capabilities under explicit Probe mode;
+- rebuild Probe, Trace, and runner integrity checks;
+- the central tool catalog and DSH/MCP adapters.
+
+No compatibility aliases are added.
+
+## Remaining Code Audit
+
+After the architecture replacement:
+
+- refresh direct dependencies and the pnpm lockfile;
+- remove unused packages, dead exports, lint warnings, and stale comments;
+- update CLI and package metadata to describe the DSH-native product;
+- verify Session directory permissions and published files;
+- retain current DSH/Cordis channel policy;
+- do not restore OpenCode, Camoufox, web_fetch, or evolve_skill.
+
+## README Rewrite
+
+`README.md` and `README_EN.md` are rewritten after the code is stable. They use the same structure and accurate commands while preserving natural Chinese and English:
+
+1. product statement and quick start;
+2. reverse-analysis completion criterion;
+3. Observe, Probe, Recipe, and Verify workflow;
+4. fixed rules, site recipes, and derived-source boundaries;
+5. DSH Sessions, Goals, Code Mode, Cordis, and Dialog interaction;
+6. tool groups, MCP adapter, artifacts, development, and authorization boundary.
+
+The final copy receives a de-slop pass. It does not describe retired systems or promise unsupported browser fidelity.
+
+## Non-goals
+
+- No Camoufox or second browser engine.
+- No direct dependency on sdenv or sdenv-jsdom.
+- No multi-version browser profile matrix or evidence scoring engine.
+- No global self-learning rule service or Recipe marketplace.
+- No complete Canvas, WebRTC, Audio, or Worker implementation.
+- No compatibility layer for the removed environment architecture.
+- No change to the intentional browser security flags.
+
+## Acceptance
+
+The change is complete when:
+
+- Observe mode injects no DeepSpider global, binding, or DOM;
+- initial browser evidence setup fails atomically;
+- two DSH Sessions isolate browser, DataStore, Recipe, rebuild, and Dialog state;
+- known Node/jsdom artifacts are consistently concealed;
+- fetch/XHR no longer fabricate success on replay misses;
+- the original target hash never changes and every working-source transform is recorded;
+- Probe produces applicable Recipe candidates and Verify succeeds offline;
+- the Dialog can select an element, send a message, and render the owning Agent's response;
+- obsolete modules are absent from source and the packed tarball;
+- unit, lint, real integration, packed-install, dry-pack, and dependency-audit checks pass;
+- both READMEs match the implemented release.
 
 ## Delivery Boundary
 
-Work remains on `main`, as previously authorized. Implementation will be committed locally after verification. It will not be pushed unless the user requests a push.
+Work remains on `main`, as previously authorized. Design and implementation commits are local until the user explicitly requests a push.
