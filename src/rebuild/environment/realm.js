@@ -9,12 +9,15 @@ export function createEnvironmentRealm({ html = '<!doctype html>', url, compiled
     pretendToBeVisual: true,
   })
   const context = dom.getInternalVMContext()
-  context.eval(compiled.installerSource)
+  const controller = context.eval(compiled.installerSource)
   let closed = false
 
   return {
     window: dom.window,
     context,
+    setTraceEmitter(emit) {
+      controller.setTraceEmitter(emit)
+    },
     close() {
       if (closed) return
       closed = true

@@ -173,6 +173,7 @@ export class NetworkInterceptor {
         status: pending.status,
         requestHeaders: pending.headers,
         requestBody: pending.postData,
+        responseHeaders: pending.responseHeaders,
         responseBody,
         timestamp: pending.timestamp,
         pageUrl: pending.pageUrl,

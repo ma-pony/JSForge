@@ -188,7 +188,7 @@ function selectTarget(manifest) {
   return { source: workingSource, filename: 'target.working.js', sha256: workingSha256, derived: true };
 }
 
-function compileEffectiveEnvironment(baseline, sessionState, recipe) {
+function compileEffectiveEnvironment(baseline, sessionState, recipe, replay) {
   return {
     values: {
       ...(baseline.values || {}),
@@ -197,7 +197,7 @@ function compileEffectiveEnvironment(baseline, sessionState, recipe) {
     },
     conceal: [...(baseline.conceal || []), ...(recipe.conceal || [])],
     handlers: { ...(recipe.handlers || {}) },
-    replay: { ...(recipe.replay || {}) },
+    replay: { ...replay, ...(recipe.replay || {}) },
   };
 }
 
@@ -267,6 +267,9 @@ function createContextTraceBridge(metadata) {
     emitRuntimeError(category, code, message) {
       emit({ category, operation: 'throw', path: 'runtime', error: { code, message } });
     },
+    emitEnvironmentEvent(event) {
+      emit(event);
+    },
     serialize() {
       return JSON.stringify(trace);
     },
@@ -282,10 +285,12 @@ async function run() {
   const baselineSource = readVerified('evidence/baseline.json', manifest.baselineSha256, 'E_BASELINE_INTEGRITY');
   const sessionStateSource = readVerified('evidence/session-state.json', manifest.sessionStateSha256, 'E_SESSION_STATE_INTEGRITY');
   const propertyFactsSource = readVerified('evidence/property-facts.json', manifest.propertyFactsSha256, 'E_PROPERTY_FACTS_INTEGRITY');
+  const networkReplaySource = readVerified('evidence/network/responses.json', manifest.networkReplaySha256, 'E_NETWORK_REPLAY_INTEGRITY');
   const recipeSource = fs.readFileSync(path.join(taskDir, 'recipe.json'), 'utf8');
   const baseline = JSON.parse(baselineSource);
   const sessionState = JSON.parse(sessionStateSource);
   JSON.parse(propertyFactsSource);
+  const replayResponses = JSON.parse(networkReplaySource);
   const recipe = JSON.parse(recipeSource);
   const recipeSha256 = sha256(recipeSource);
   const probeSha256 = mode === 'probe' ? sha256(probeInstallerSource) : null;
@@ -310,8 +315,8 @@ async function run() {
       pretendToBeVisual: true,
     });
     const context = dom.getInternalVMContext();
-    const effective = compileEffectiveEnvironment(baseline, sessionState, recipe);
-    new vm.Script('(' + environmentInstallerSource + ')(' + JSON.stringify(effective) + ')', {
+    const effective = compileEffectiveEnvironment(baseline, sessionState, recipe, { responses: replayResponses });
+    const environmentController = new vm.Script('(' + environmentInstallerSource + ')(' + JSON.stringify(effective) + ')', {
       filename: 'environment-installer.js',
     }).runInContext(context, { timeout: runtimeTimeoutMs });
 
@@ -323,6 +328,7 @@ async function run() {
       baselineSha256: manifest.baselineSha256,
       sessionStateSha256: manifest.sessionStateSha256,
       propertyFactsSha256: manifest.propertyFactsSha256,
+      networkReplaySha256: manifest.networkReplaySha256,
       recipeSha256,
       probeSha256,
       runnerSha256,
@@ -330,6 +336,7 @@ async function run() {
     const bootstrapSource = '(' + createContextTraceBridge.toString() + ')(' + JSON.stringify(metadata) + ')';
     traceBridge = new vm.Script(bootstrapSource, { filename: 'runtime-bootstrap.js' })
       .runInContext(context, { timeout: runtimeTimeoutMs });
+    environmentController.setTraceEmitter(traceBridge.emitEnvironmentEvent);
 
     if (mode === 'probe') {
       traceBridge.installNodeGuards();
@@ -404,6 +411,7 @@ async function run() {
       baselineSha256: manifest.baselineSha256,
       sessionStateSha256: manifest.sessionStateSha256,
       propertyFactsSha256: manifest.propertyFactsSha256,
+      networkReplaySha256: manifest.networkReplaySha256,
       recipeSha256,
       probeSha256,
       runnerSha256,

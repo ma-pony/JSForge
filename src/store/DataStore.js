@@ -29,7 +29,16 @@ function contentHash(content) {
  * 生成请求唯一标识
  */
 function requestHash(url, method, body) {
-  return contentHash(`${url}|${method}|${body || ''}`);
+  const exactBody = body == null ? '<null>' : String(body);
+  return contentHash(`${normalizeUrl(url)}|${String(method || 'GET').toUpperCase()}|${exactBody}`);
+}
+
+function normalizeUrl(url) {
+  try {
+    return new URL(url).href;
+  } catch {
+    return String(url || '');
+  }
 }
 
 /**
@@ -45,7 +54,7 @@ function scriptHash(url, source) {
 function sanitizeHostname(host) {
   const cleaned = String(host || '')
     .toLowerCase()
-    .replace(/[^a-z0-9.\-]/g, '_')   // 仅保留 hostname 合法字符
+    .replace(/[^a-z0-9.-]/g, '_')    // 仅保留 hostname 合法字符
     .replace(/\.{2,}/g, '_')          // 防 ".." 遍历
     .replace(/^[._-]+|[._-]+$/g, '')  // 移除首尾标点
     .slice(0, 253);                   // RFC 1035 hostname 上限
@@ -346,7 +355,10 @@ export class DataStore {
    * 保存响应数据（带去重，带锁防止竞态条件）
    */
   async saveResponse(data) {
-    const { url, method, status, requestHeaders, requestBody, responseBody, timestamp, pageUrl, initiator } = data;
+    const {
+      url, method, status, requestHeaders, requestBody,
+      responseHeaders, responseBody, timestamp, pageUrl, initiator,
+    } = data;
     const { site, path } = parseUrl(pageUrl || url);
 
     // 获取站点锁，防止并发写入
@@ -364,19 +376,18 @@ export class DataStore {
       // 检查是否已存在相同内容
       const existing = index.responses.find(r => r.hash === hash);
       if (existing) {
-        // 更新时间戳和会话，不重复存储
+        // 同一请求在新 Session 中出现时，用本次真实响应刷新重放证据。
+        const content = JSON.stringify({
+          url, method, status,
+          requestHeaders, requestBody, responseHeaders, responseBody,
+          pageUrl, timestamp, initiator,
+        });
+        await writeFile(existing.file, content, { mode: 0o600 });
         existing.timestamp = timestamp || Date.now();
         existing.sessionId = this.getSessionId();
-        // 更新 initiator（不同代码路径可能调用同一 API）
-        if (initiator) {
-          existing.hasInitiator = true;
-          // 同步更新详情文件中的 initiator
-          try {
-            const detail = JSON.parse(await readFile(existing.file, 'utf-8'));
-            detail.initiator = initiator;
-            await writeFile(existing.file, JSON.stringify(detail), { mode: 0o600 });
-          } catch { /* 文件读写失败不影响主流程 */ }
-        }
+        existing.status = status;
+        existing.size = content.length;
+        existing.hasInitiator = !!initiator;
         await this.saveSiteIndex(site);
         result = { id: existing.id, site, path, deduplicated: true };
       } else {
@@ -392,7 +403,7 @@ export class DataStore {
 
         const content = JSON.stringify({
           url, method, status,
-          requestHeaders, requestBody, responseBody,
+          requestHeaders, requestBody, responseHeaders, responseBody,
           pageUrl, timestamp, initiator,
         });
 
@@ -666,6 +677,38 @@ export class DataStore {
     try {
       return JSON.parse(await readFile(meta.file, 'utf-8'));
     } catch { return null; }
+  }
+
+  /**
+   * 查找当前 Session 的精确离线响应。
+   */
+  async findReplayResponse({ url, method = 'GET', body = null }) {
+    const expectedUrl = normalizeUrl(url);
+    const expectedMethod = String(method).toUpperCase();
+    const expectedBody = body == null ? null : String(body);
+    const currentSession = this.getSessionId();
+
+    for (const site of this.globalIndex.sites) {
+      const index = await this.getSiteIndex(site.hostname);
+      for (const meta of index.responses) {
+        if (meta.sessionId !== currentSession) continue;
+        if (normalizeUrl(meta.url) !== expectedUrl) continue;
+        if (String(meta.method || 'GET').toUpperCase() !== expectedMethod) continue;
+        const detail = await this.getResponse(site.hostname, meta.id);
+        if (!detail) continue;
+        const requestBody = detail.requestBody == null ? null : String(detail.requestBody);
+        if (requestBody !== expectedBody) continue;
+        return {
+          url: expectedUrl,
+          method: expectedMethod,
+          requestBody,
+          status: detail.status,
+          headers: detail.responseHeaders || {},
+          body: detail.responseBody ?? '',
+        };
+      }
+    }
+    return null;
   }
 
   /**

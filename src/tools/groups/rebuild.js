@@ -32,6 +32,24 @@ function writePrivateFile(file, content) {
   fs.writeFileSync(file, content, { encoding: 'utf8', mode: 0o600 })
 }
 
+async function collectReplayResponses(store) {
+  const entries = await store.getResponseList(null, true)
+  const responses = []
+  for (const entry of entries) {
+    const detail = await store.getResponse(entry.site, entry.id)
+    if (!detail) continue
+    responses.push({
+      url: new URL(detail.url).href,
+      method: String(detail.method || 'GET').toUpperCase(),
+      requestBody: detail.requestBody == null ? null : String(detail.requestBody),
+      status: detail.status,
+      headers: detail.responseHeaders || {},
+      body: detail.responseBody ?? '',
+    })
+  }
+  return responses
+}
+
 export const tools = Object.freeze([
   defineDeepSpiderTool({
     name: 'export_rebuild_bundle',
@@ -71,11 +89,15 @@ export const tools = Object.freeze([
         }
 
         const page = await runtime.getPage({ signal })
-        const sessionState = await new SessionEvidenceCollector(page).collect()
+        const [sessionState, replayResponses] = await Promise.all([
+          new SessionEvidenceCollector(page).collect(),
+          collectReplayResponses(store),
+        ])
         const baselineSource = JSON.stringify(getChromeBaseline(), null, 2)
         const sessionStateSource = JSON.stringify(sessionState, null, 2)
         const propertyFactsSource = JSON.stringify(runtime.captures?.propertyFacts || [], null, 2)
         const recipeSource = JSON.stringify(createRecipe(), null, 2)
+        const networkReplaySource = JSON.stringify(replayResponses, null, 2)
         const manifest = createManifest({
           sessionId,
           site: script.site,
@@ -87,6 +109,7 @@ export const tools = Object.freeze([
           sessionStateSource,
           propertyFactsSource,
           recipeSource,
+          networkReplaySource,
           jsdomEntryPath: require.resolve('jsdom'),
           callExpression,
         })
@@ -95,12 +118,14 @@ export const tools = Object.freeze([
         fs.mkdirSync(taskDir, { mode: 0o700 })
         fs.mkdirSync(path.join(taskDir, 'evidence'), { mode: 0o700 })
         fs.mkdirSync(path.join(taskDir, 'evidence', 'dynamic'), { mode: 0o700 })
+        fs.mkdirSync(path.join(taskDir, 'evidence', 'network'), { mode: 0o700 })
         fs.mkdirSync(path.join(taskDir, 'runs'), { mode: 0o700 })
         writePrivateFile(path.join(taskDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
         writePrivateFile(path.join(taskDir, 'target.original.js'), targetSource)
         writePrivateFile(path.join(taskDir, 'evidence', 'baseline.json'), baselineSource)
         writePrivateFile(path.join(taskDir, 'evidence', 'session-state.json'), sessionStateSource)
         writePrivateFile(path.join(taskDir, 'evidence', 'property-facts.json'), propertyFactsSource)
+        writePrivateFile(path.join(taskDir, 'evidence', 'network', 'responses.json'), networkReplaySource)
         writePrivateFile(path.join(taskDir, 'recipe.json'), recipeSource)
         writePrivateFile(path.join(taskDir, 'transforms.json'), '[]\n')
         writePrivateFile(path.join(taskDir, 'runner.mjs'), buildRunnerCode())

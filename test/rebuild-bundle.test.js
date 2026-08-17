@@ -39,6 +39,7 @@ test('creates a deterministic immutable manifest', () => {
   const sessionStateSource = '{"source":"patchright-session"}'
   const propertyFactsSource = '[]'
   const recipeSource = '{"baseline":"chrome-default"}'
+  const networkReplaySource = '[]'
 
   const manifest = createManifest({
     sessionId: 'session-1',
@@ -51,6 +52,7 @@ test('creates a deterministic immutable manifest', () => {
     sessionStateSource,
     propertyFactsSource,
     recipeSource,
+    networkReplaySource,
     jsdomEntryPath: '/packages/jsdom/lib/api.js',
     callExpression: 'window.answer',
     createdAt: '2026-08-14T00:00:00.000Z',
@@ -69,6 +71,7 @@ test('creates a deterministic immutable manifest', () => {
     sessionStateSha256: sha256(sessionStateSource),
     propertyFactsSha256: sha256(propertyFactsSource),
     recipeSha256: sha256(recipeSource),
+    networkReplaySha256: sha256(networkReplaySource),
     jsdomEntryPath: '/packages/jsdom/lib/api.js',
     callExpression: 'window.answer',
     createdAt: '2026-08-14T00:00:00.000Z',

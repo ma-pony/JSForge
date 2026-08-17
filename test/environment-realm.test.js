@@ -101,3 +101,53 @@ test('closing a Realm closes its owned jsdom window', () => {
   realm.close()
   assert.equal(realm.window.document, undefined)
 })
+
+test('fetch and XHR replay exact captures and report a replay miss instead of fabricating success', async () => {
+  const compiled = compileEnvironment({
+    baseline: getChromeBaseline(),
+    sessionState: {},
+    recipe: createRecipe(),
+    replay: {
+      responses: [{
+        url: 'https://example.com/api/data',
+        method: 'POST',
+        requestBody: 'a=1',
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+        body: '{"ok":true}',
+      }],
+    },
+  })
+  const realm = createEnvironmentRealm({
+    html: '<!doctype html>',
+    url: 'https://example.com/page',
+    compiled,
+  })
+  const emit = new vm.Script(`
+    globalThis.__replayTrace = [];
+    (event) => globalThis.__replayTrace.push(JSON.parse(JSON.stringify(event)))
+  `).runInContext(realm.context)
+  realm.setTraceEmitter(emit)
+
+  const fetchHit = await new vm.Script(`fetch('/api/data', {
+    method: 'POST', body: 'a=1'
+  }).then(async (response) => ({ status: response.status, body: await response.text() }))`).runInContext(realm.context)
+  assert.deepEqual(JSON.parse(JSON.stringify(fetchHit)), { status: 201, body: '{"ok":true}' })
+
+  const xhrHit = await new vm.Script(`new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/data');
+    xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
+    xhr.onerror = reject;
+    xhr.send('a=1');
+  })`).runInContext(realm.context)
+  assert.deepEqual(JSON.parse(JSON.stringify(xhrHit)), { status: 201, body: '{"ok":true}' })
+
+  await assert.rejects(
+    new vm.Script(`fetch('/missing')`).runInContext(realm.context),
+    /No replay response/,
+  )
+  const trace = JSON.parse(new vm.Script('JSON.stringify(globalThis.__replayTrace)').runInContext(realm.context))
+  assert.equal(trace.some((event) => event.category === 'replay-miss' && event.path.endsWith('/missing')), true)
+  realm.close()
+})

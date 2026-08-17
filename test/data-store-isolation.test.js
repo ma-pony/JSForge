@@ -155,3 +155,57 @@ test('DataStore scans complete response and script files after a prefix-index mi
   assert.equal(matches[0].matchIndex, prefix.length + ' const '.length)
   assert.match(matches[0].context, /MixedCaseScriptNeedle/)
 })
+
+test('replay lookup matches the exact request only inside the current Session', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-data-store-replay-'))
+  const store = new DataStore({ root: path.join(temporary, 'data') })
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+
+  store.startSession()
+  await store.saveResponse({
+    url: 'https://example.test/api/data?b=2&a=1',
+    method: 'post',
+    status: 201,
+    requestBody: 'a=1',
+    responseHeaders: { 'content-type': 'application/json' },
+    responseBody: '{"ok":true}',
+    pageUrl: 'https://example.test/app',
+  })
+
+  assert.deepEqual(await store.findReplayResponse({
+    url: 'https://example.test/api/data?b=2&a=1',
+    method: 'POST',
+    body: 'a=1',
+  }), {
+    url: 'https://example.test/api/data?b=2&a=1',
+    method: 'POST',
+    requestBody: 'a=1',
+    status: 201,
+    headers: { 'content-type': 'application/json' },
+    body: '{"ok":true}',
+  })
+  assert.equal(await store.findReplayResponse({
+    url: 'https://example.test/api/data?b=2&a=1', method: 'POST', body: 'a=2',
+  }), null)
+
+  store.startSession()
+  assert.equal(await store.findReplayResponse({
+    url: 'https://example.test/api/data?b=2&a=1', method: 'POST', body: 'a=1',
+  }), null)
+
+  await store.saveResponse({
+    url: 'https://example.test/api/data?b=2&a=1',
+    method: 'POST',
+    status: 202,
+    requestBody: 'a=1',
+    responseHeaders: { 'x-session': 'new' },
+    responseBody: 'new-session-response',
+    pageUrl: 'https://example.test/app',
+  })
+  const current = await store.findReplayResponse({
+    url: 'https://example.test/api/data?b=2&a=1', method: 'POST', body: 'a=1',
+  })
+  assert.equal(current.status, 202)
+  assert.equal(current.body, 'new-session-response')
+  assert.deepEqual(current.headers, { 'x-session': 'new' })
+})

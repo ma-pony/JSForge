@@ -36,6 +36,20 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
       calls.push(['getScript', site, scriptId])
       return source
     },
+    async getResponseList(site, sessionOnly) {
+      calls.push(['getResponseList', site, sessionOnly])
+      return [{ id: 'response-current', site: 'example.com' }]
+    },
+    async getResponse(site, responseId) {
+      calls.push(['getResponse', site, responseId])
+      return {
+        url: 'https://example.com/api/data',
+        method: 'GET',
+        status: 200,
+        responseHeaders: { 'content-type': 'application/json' },
+        responseBody: '{"ok":true}',
+      }
+    },
   }
   const runtime = {
     dataStore: store,
@@ -61,6 +75,8 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
   assert.deepEqual(calls, [
     ['getScriptList', null, true],
     ['getScript', 'example.com', 'script-current'],
+    ['getResponseList', null, true],
+    ['getResponse', 'example.com', 'response-current'],
   ])
 
   const taskDir = path.join(rebuildDir, 'fixture-task')
@@ -76,6 +92,7 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
   assert.deepEqual(fs.readdirSync(path.join(taskDir, 'evidence')).sort(), [
     'baseline.json',
     'dynamic',
+    'network',
     'property-facts.json',
     'session-state.json',
   ])
@@ -87,6 +104,14 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
   assert.equal(fs.readFileSync(path.join(taskDir, 'target.original.js'), 'utf8'), source)
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(taskDir, 'evidence', 'session-state.json'), 'utf8')), pageData)
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(taskDir, 'evidence', 'property-facts.json'), 'utf8')), runtime.captures.propertyFacts)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(taskDir, 'evidence', 'network', 'responses.json'), 'utf8')), [{
+    url: 'https://example.com/api/data',
+    method: 'GET',
+    requestBody: null,
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    body: '{"ok":true}',
+  }])
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(taskDir, 'transforms.json'), 'utf8')), [])
   assert.equal(result.originalImmutable, true)
   assert.equal(result.derivedTargetAllowed, true)

@@ -59,6 +59,7 @@ function createBundle() {
   }, null, 2)
   const propertyFactsSource = '[]'
   const recipeSource = JSON.stringify(createRecipe(), null, 2)
+  const networkReplaySource = '[]'
   const manifest = createManifest({
     sessionId: 'session-protected',
     site: 'example.com',
@@ -70,18 +71,21 @@ function createBundle() {
     sessionStateSource,
     propertyFactsSource,
     recipeSource,
+    networkReplaySource,
     jsdomEntryPath: require.resolve('jsdom'),
     callExpression: 'window.protectedResult',
     createdAt: '2026-08-14T00:00:00.000Z',
   })
 
   fs.mkdirSync(path.join(directory, 'evidence', 'dynamic'), { recursive: true })
+  fs.mkdirSync(path.join(directory, 'evidence', 'network'))
   fs.mkdirSync(path.join(directory, 'runs'))
   fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest, null, 2))
   fs.writeFileSync(path.join(directory, 'target.original.js'), targetSource)
   fs.writeFileSync(path.join(directory, 'evidence', 'baseline.json'), baselineSource)
   fs.writeFileSync(path.join(directory, 'evidence', 'session-state.json'), sessionStateSource)
   fs.writeFileSync(path.join(directory, 'evidence', 'property-facts.json'), propertyFactsSource)
+  fs.writeFileSync(path.join(directory, 'evidence', 'network', 'responses.json'), networkReplaySource)
   fs.writeFileSync(path.join(directory, 'recipe.json'), recipeSource)
   fs.writeFileSync(path.join(directory, 'transforms.json'), '[]')
   fs.writeFileSync(path.join(directory, 'runner.mjs'), buildRunnerCode())

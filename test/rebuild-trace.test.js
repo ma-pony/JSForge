@@ -23,6 +23,10 @@ test('selects the highest-priority runtime divergence and preserves the original
     nextAction: 'remove Node-only identity from the runtime realm',
     originalImmutable: true,
     derivedTargetAllowed: true,
+    candidateRules: [
+      { path: 'navigator.plugins', action: 'undefined' },
+      { path: 'process', action: 'hide' },
+    ],
   })
 })
 
@@ -65,4 +69,18 @@ test('reports a stable next action for each supported category', () => {
     assert.equal(result.originalImmutable, true)
     assert.equal(result.derivedTargetAllowed, true)
   }
+})
+
+test('returns concrete Recipe candidates for ordinary runtime differences', () => {
+  const result = analyzeTrace([
+    { category: 'value-mismatch', path: 'navigator.connection.rtt', expected: 50 },
+    { category: 'runtime-artifact', path: '_globalProxy' },
+    { category: 'environment-missing', path: 'navigator.someFlag' },
+  ])
+
+  assert.deepEqual(result.candidateRules, [
+    { path: 'navigator.connection.rtt', action: 'fixed', value: 50 },
+    { path: '_globalProxy', action: 'hide' },
+    { path: 'navigator.someFlag', action: 'undefined' },
+  ])
 })

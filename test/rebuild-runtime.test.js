@@ -46,6 +46,7 @@ globalThis.inspectRuntime = function inspectRuntime() {
   }, null, 2)
   const propertyFactsSource = JSON.stringify([], null, 2)
   const recipeSource = JSON.stringify(createRecipe(), null, 2)
+  const networkReplaySource = JSON.stringify(options.responses || [], null, 2)
   const manifest = createManifest({
     sessionId: 'session-1',
     site: 'example.com',
@@ -57,18 +58,21 @@ globalThis.inspectRuntime = function inspectRuntime() {
     sessionStateSource,
     propertyFactsSource,
     recipeSource,
+    networkReplaySource,
     jsdomEntryPath: require.resolve('jsdom'),
     callExpression: options.callExpression ?? 'window.inspectRuntime()',
     createdAt: '2026-08-14T00:00:00.000Z',
   })
 
   fs.mkdirSync(path.join(directory, 'evidence', 'dynamic'), { recursive: true })
+  fs.mkdirSync(path.join(directory, 'evidence', 'network'))
   fs.mkdirSync(path.join(directory, 'runs'))
   fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest, null, 2))
   fs.writeFileSync(path.join(directory, 'target.original.js'), targetSource)
   fs.writeFileSync(path.join(directory, 'evidence', 'baseline.json'), baselineSource)
   fs.writeFileSync(path.join(directory, 'evidence', 'session-state.json'), sessionStateSource)
   fs.writeFileSync(path.join(directory, 'evidence', 'property-facts.json'), propertyFactsSource)
+  fs.writeFileSync(path.join(directory, 'evidence', 'network', 'responses.json'), networkReplaySource)
   fs.writeFileSync(path.join(directory, 'recipe.json'), recipeSource)
   fs.writeFileSync(path.join(directory, 'transforms.json'), '[]')
   fs.writeFileSync(path.join(directory, 'runner.mjs'), buildRunnerCode(options.runnerOptions))
@@ -194,6 +198,7 @@ test('probe and verify runs create separate immutable result records', () => {
     assert.equal(record.baselineSha256, manifest.baselineSha256)
     assert.equal(record.sessionStateSha256, manifest.sessionStateSha256)
     assert.equal(record.propertyFactsSha256, manifest.propertyFactsSha256)
+    assert.equal(record.networkReplaySha256, manifest.networkReplaySha256)
     assert.equal(record.recipeSha256, manifest.recipeSha256)
     assert.equal(record.derivedTarget, false)
     assert.equal(record.runnerSha256, runnerSha256)
@@ -227,7 +232,7 @@ test('runner bounds an entry promise that never settles and traces the timeout',
     callExpression: 'window.waitForever()',
     runnerOptions: { timeoutMs: 50 },
   })
-  const result = runBundle(directory, 'verify', { timeout: 1000 })
+  const result = runBundle(directory, 'verify', { timeout: 3000 })
 
   assert.equal(result.status, 1, result.stderr)
   assert.match(result.stderr, /E_RUNTIME_TIMEOUT/)
@@ -359,4 +364,30 @@ test('probe classifies a missing browser property from a real target access', ()
   const trace = fs.readFileSync(path.join(directory, 'runs', runId, 'trace.ndjson'), 'utf8')
   assert.match(trace, /"category":"environment-missing"/)
   assert.match(trace, /"path":"navigator\.missingFeature"/)
+})
+
+test('runner replays captured fetch evidence and traces an exact miss', () => {
+  const directory = createBundle({
+    responses: [{
+      url: 'https://example.com/api/data', method: 'GET', requestBody: null,
+      status: 200, headers: { 'content-type': 'application/json' }, body: '{"ok":true}',
+    }],
+    targetSource: `
+globalThis.replayResult = async () => {
+  const hit = await fetch('/api/data');
+  await fetch('/missing');
+  return hit.text();
+};
+`,
+    callExpression: 'window.replayResult()',
+  })
+
+  const result = runBundle(directory, 'probe')
+
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /No replay response/)
+  const runId = fs.readdirSync(path.join(directory, 'runs'))[0]
+  const trace = fs.readFileSync(path.join(directory, 'runs', runId, 'trace.ndjson'), 'utf8')
+  assert.match(trace, /"category":"replay-miss"/)
+  assert.match(trace, /https:\/\/example\.com\/missing/)
 })

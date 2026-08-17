@@ -1,5 +1,10 @@
 function installer(effective) {
   const root = globalThis
+  let traceEmitter = null
+
+  function emit(event) {
+    if (traceEmitter) traceEmitter(event)
+  }
 
   function isolateHostConstructors() {
     const realmFunction = Function
@@ -179,6 +184,152 @@ function installer(effective) {
       writable: true,
     })
   }
+
+  const replayResponses = Array.isArray(effective.replay?.responses)
+    ? effective.replay.responses
+    : []
+
+  function normalizeRequest(input, options = {}) {
+    const inputUrl = typeof input === 'object' && input !== null && 'url' in input
+      ? input.url
+      : String(input)
+    const inputMethod = typeof input === 'object' && input !== null && 'method' in input
+      ? input.method
+      : 'GET'
+    const inputBody = typeof input === 'object' && input !== null && 'body' in input
+      ? input.body
+      : null
+    return {
+      url: new URL(inputUrl, root.location.href).href,
+      method: String(options.method || inputMethod || 'GET').toUpperCase(),
+      body: options.body == null
+        ? (inputBody == null ? null : String(inputBody))
+        : String(options.body),
+    }
+  }
+
+  function findReplay(request) {
+    return replayResponses.find((response) =>
+      response.url === request.url &&
+      String(response.method || 'GET').toUpperCase() === request.method &&
+      (response.requestBody == null ? null : String(response.requestBody)) === request.body)
+  }
+
+  function replayMiss(request) {
+    emit({
+      category: 'replay-miss',
+      operation: 'request',
+      path: request.url,
+      method: request.method,
+      body: request.body,
+    })
+    return new TypeError(`No replay response for ${request.method} ${request.url}`)
+  }
+
+  function replayHeaders(values = {}) {
+    const entries = Object.entries(values).map(([name, value]) => [name.toLowerCase(), String(value)])
+    const map = new Map(entries)
+    return {
+      get: (name) => map.get(String(name).toLowerCase()) ?? null,
+      has: (name) => map.has(String(name).toLowerCase()),
+      entries: () => map.entries(),
+      keys: () => map.keys(),
+      values: () => map.values(),
+      forEach: (callback, thisArg) => map.forEach((value, name) => callback.call(thisArg, value, name)),
+      [Symbol.iterator]: () => map.entries(),
+    }
+  }
+
+  function replayResponse(record) {
+    const body = record.body == null ? '' : String(record.body)
+    return {
+      ok: record.status >= 200 && record.status < 300,
+      status: record.status,
+      statusText: '',
+      url: record.url,
+      redirected: false,
+      type: 'basic',
+      headers: replayHeaders(record.headers),
+      text: async () => body,
+      json: async () => JSON.parse(body),
+      arrayBuffer: async () => Uint8Array.from(body, (character) => character.charCodeAt(0) & 255).buffer,
+    }
+  }
+
+  defineValue('fetch', nativeFunction('fetch', async function fetch(input, options = {}) {
+    const request = normalizeRequest(input, options)
+    const response = findReplay(request)
+    if (!response) throw replayMiss(request)
+    return replayResponse(response)
+  }))
+
+  class ReplayXMLHttpRequest {
+    constructor() {
+      this.readyState = 0
+      this.status = 0
+      this.responseText = ''
+      this.response = ''
+      this.responseURL = ''
+      this.onload = null
+      this.onerror = null
+      this.onreadystatechange = null
+      this.listeners = Object.create(null)
+    }
+
+    open(method, url) {
+      this.method = String(method || 'GET').toUpperCase()
+      this.url = new URL(String(url), root.location.href).href
+      this.readyState = 1
+      this.dispatch('readystatechange')
+    }
+
+    setRequestHeader() {}
+
+    addEventListener(type, listener) {
+      if (!this.listeners[type]) this.listeners[type] = []
+      this.listeners[type].push(listener)
+    }
+
+    dispatch(type, value) {
+      const handler = this[`on${type}`]
+      if (typeof handler === 'function') handler.call(this, value)
+      for (const listener of this.listeners[type] || []) listener.call(this, value)
+    }
+
+    send(body = null) {
+      const request = { url: this.url, method: this.method, body: body == null ? null : String(body) }
+      const record = findReplay(request)
+      if (!record) {
+        const error = replayMiss(request)
+        this.readyState = 4
+        this.dispatch('readystatechange')
+        if (this.onerror || this.listeners.error?.length) this.dispatch('error', error)
+        else throw error
+        return
+      }
+      this.status = record.status
+      this.responseText = record.body == null ? '' : String(record.body)
+      this.response = this.responseText
+      this.responseURL = record.url
+      this.readyState = 4
+      this.dispatch('readystatechange')
+      this.dispatch('load')
+    }
+  }
+
+  Object.defineProperty(ReplayXMLHttpRequest, 'name', { value: 'XMLHttpRequest', configurable: true })
+  Object.defineProperty(ReplayXMLHttpRequest.prototype, Symbol.toStringTag, {
+    value: 'XMLHttpRequest',
+    configurable: true,
+  })
+  nativeSource.set(ReplayXMLHttpRequest, 'function XMLHttpRequest() { [native code] }')
+  defineValue('XMLHttpRequest', ReplayXMLHttpRequest)
+
+  return Object.freeze({
+    setTraceEmitter(next) {
+      traceEmitter = typeof next === 'function' ? next : null
+    },
+  })
 }
 
 export function getEnvironmentInstallerFunctionSource() {
