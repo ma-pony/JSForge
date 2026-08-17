@@ -69,17 +69,44 @@ test('both READMEs expose the exact same current CLI command table', () => {
 
 test('README capability and command sections do not advertise retired DSH capabilities', () => {
   for (const { file, content } of readmes) {
-    const headings = file === 'README.md'
-      ? ['## 核心特性', '## 使用方式']
-      : ['## Core features', '## Usage']
-    const documentedSurface = headings.map((heading) => readmeSection(content, heading)).join('\n')
-
     assert.doesNotMatch(
-      documentedSurface,
-      /\b(?:Plan Mode|Subagents|Workflows|Ralph|web_fetch|evolve_skill|evolve)\b/i,
+      content,
+      /OpenCode|deepspider\s+config(?:\s|$)|\bTUI\b|\bPlan Mode\b|\bSubagents\b|\bWorkflows\b|\bRalph\b|\bweb_fetch\b|\bevolve(?:_skill)?\b/i,
       `${file} must not advertise a retired capability`
     )
-    assert.doesNotMatch(documentedSurface, /OpenCode|opencode|\bTUI\b|deepspider config/i)
+  }
+})
+
+test('both READMEs retain the full native DSH product contract', () => {
+  const contracts = {
+    'README.md': [
+      /DSH Web/,
+      /Session|会话/,
+      /Goals|目标/,
+      /Code Mode/,
+      /Cordis/,
+      /Patchright Chromium/,
+      /Node\.js `>=24\.0\.0`/,
+      /pnpm `11\.21\.0`/,
+      /Ctrl\+C/,
+      /MCP.*(?:外部适配器|stdio 适配器)/,
+    ],
+    'README_EN.md': [
+      /DSH Web/,
+      /Session/,
+      /Goals/,
+      /Code Mode/,
+      /Cordis/,
+      /Patchright Chromium/,
+      /Node\.js `>=24\.0\.0`/,
+      /pnpm `11\.21\.0`/,
+      /Ctrl\+C/,
+      /MCP.*(?:external adapter|stdio adapter)/,
+    ],
+  }
+
+  for (const { file, content } of readmes) {
+    contracts[file].forEach((pattern) => assert.match(content, pattern, `${file} must retain ${pattern}`))
   }
 })
 

@@ -17,6 +17,12 @@ function loadWorkflow(file) {
   return yaml.load(fs.readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8'))
 }
 
+function setupStep(steps, action) {
+  const step = steps.find((candidate) => candidate.uses === action)
+  assert.ok(step, `workflow must use ${action}`)
+  return step
+}
+
 test('manifest has the exact direct runtime dependency surface', () => {
   assert.deepEqual(Object.keys(root.dependencies).sort(), [
     '@deepseek-ai/cordis',
@@ -79,10 +85,10 @@ test('publish job provisions Patchright after the frozen release gates and befor
     ]
   )
   assert.equal(workflow.jobs.publish.needs, 'test')
-  assert.equal(workflow.jobs.test.steps[1].with.version, '11.21.0')
-  assert.equal(workflow.jobs.publish.steps[1].with.version, '11.21.0')
-  assert.equal(workflow.jobs.test.steps[2].with['node-version'], '24')
-  assert.equal(workflow.jobs.publish.steps[2].with['node-version'], '24')
+  assert.equal(setupStep(workflow.jobs.test.steps, 'pnpm/action-setup@v4').with.version, '11.21.0')
+  assert.equal(setupStep(workflow.jobs.publish.steps, 'pnpm/action-setup@v4').with.version, '11.21.0')
+  assert.equal(setupStep(workflow.jobs.test.steps, 'actions/setup-node@v4').with['node-version'], '24')
+  assert.equal(setupStep(workflow.jobs.publish.steps, 'actions/setup-node@v4').with['node-version'], '24')
 })
 
 test('DSH refresh workflow reports dependency drift through the full release gate', () => {
@@ -91,8 +97,8 @@ test('DSH refresh workflow reports dependency drift through the full release gat
 
   assert.ok(workflow.on.schedule)
   assert.deepEqual(workflow.on.workflow_dispatch, null)
-  assert.equal(workflow.jobs.refresh.steps[1].with.version, '11.21.0')
-  assert.equal(workflow.jobs.refresh.steps[2].with['node-version'], '24')
+  assert.equal(setupStep(workflow.jobs.refresh.steps, 'pnpm/action-setup@v4').with.version, '11.21.0')
+  assert.equal(setupStep(workflow.jobs.refresh.steps, 'actions/setup-node@v4').with['node-version'], '24')
   assert.deepEqual(runs, [
     'pnpm update @deepseek-ai/dsh@latest @deepseek-ai/cordis@latest @deepseek-ai/dsh-tools@next',
     'pnpm test',
