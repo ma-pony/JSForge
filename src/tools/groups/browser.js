@@ -49,6 +49,32 @@ async function ensureConsoleTracking(runtime, cdp, signal) {
 
 export const tools = Object.freeze([
   defineDeepSpiderTool({
+    name: 'browser_dialog',
+    description: 'Open or close the Session-owned in-page DeepSpider Dialog',
+    parameters: {
+      action: {
+        type: 'string',
+        enum: ['open', 'close'],
+        required: true,
+        description: 'Open or close the in-page DeepSpider Dialog',
+      },
+    },
+    async execute(runtime, { action }, signal) {
+      try {
+        if (action === 'close') {
+          if (!runtime.browserClient) return { mode: 'observe', open: false }
+          await runtime.waitForOperation(runtime.browserClient.closeDialog(), { signal })
+          return { mode: runtime.browserClient.mode, open: false }
+        }
+        const client = await runtime.getBrowserClient({ signal })
+        await runtime.waitForOperation(client.openDialog(), { signal })
+        return { mode: 'interactive', open: true }
+      } catch (error) {
+        failure(error)
+      }
+    },
+  }),
+  defineDeepSpiderTool({
     name: 'navigate_page',
     description: 'Navigate to URL or reload current page',
     parameters: {

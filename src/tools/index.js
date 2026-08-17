@@ -8,7 +8,6 @@ import { tools as scriptTools } from './groups/script.js'
 import { tools as captureTools } from './groups/capture.js'
 import { tools as rebuildTools } from './groups/rebuild.js'
 
-export const DEEPSPIDER_TOOL_COUNT = 51
 export const deepSpiderCatalog = createToolCatalog([
   browserTools,
   networkTools,
@@ -19,3 +18,4 @@ export const deepSpiderCatalog = createToolCatalog([
   captureTools,
   rebuildTools,
 ])
+export const DEEPSPIDER_TOOL_COUNT = deepSpiderCatalog.length

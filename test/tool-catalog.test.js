@@ -19,6 +19,14 @@ import { tools as stealthTools } from '../src/tools/groups/stealth.js'
 import { DEEPSPIDER_TOOL_COUNT, deepSpiderCatalog } from '../src/tools/index.js'
 
 const BROWSER_FACING_CONTRACTS = [
+  ['browser_dialog', {
+    action: {
+      type: 'string',
+      enum: ['open', 'close'],
+      required: true,
+      description: 'Open or close the in-page DeepSpider Dialog',
+    },
+  }],
   ['navigate_page', {
     url: { type: 'string', description: 'URL to navigate to' },
     reload: { type: 'boolean', default: false, description: 'Reload current page' },
@@ -294,8 +302,8 @@ test('browser-facing groups expose the complete frozen public name and parameter
   const groups = [browserTools, networkTools, debuggerTools, hookTools, stealthTools]
   const catalog = createToolCatalog(groups)
 
-  assert.equal(catalog.length, 44)
-  assert.equal(new Set(catalog.map(({ name }) => name)).size, 44)
+  assert.equal(catalog.length, 45)
+  assert.equal(new Set(catalog.map(({ name }) => name)).size, 45)
   assert.deepEqual(
     catalog.map(({ name, parameters }) => [name, parameters]),
     BROWSER_FACING_CONTRACTS,
@@ -308,10 +316,10 @@ test('browser-facing groups expose the complete frozen public name and parameter
   }
 })
 
-test('the central catalog has the exact 51-tool stable group contract', () => {
+test('the central catalog derives its published count from the tool groups', () => {
   const names = deepSpiderCatalog.map(({ name }) => name)
 
-  assert.equal(DEEPSPIDER_TOOL_COUNT, 51)
+  assert.equal(DEEPSPIDER_TOOL_COUNT, deepSpiderCatalog.length)
   assert.equal(deepSpiderCatalog.length, DEEPSPIDER_TOOL_COUNT)
   assert.equal(new Set(names).size, DEEPSPIDER_TOOL_COUNT)
   assert.deepEqual(

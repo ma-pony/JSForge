@@ -9,6 +9,7 @@ import { getDefaultHookScript } from './defaultHooks.js';
 import { NetworkInterceptor } from './interceptors/NetworkInterceptor.js';
 import { ScriptInterceptor } from './interceptors/ScriptInterceptor.js';
 import { AntiDebugInterceptor } from './interceptors/AntiDebugInterceptor.js';
+import { DialogBridge } from './DialogBridge.js';
 
 export class BrowserClient extends EventEmitter {
   constructor({ dataStore, browserType = chromium } = {}) {
@@ -30,6 +31,9 @@ export class BrowserClient extends EventEmitter {
     this.mode = null;
     this.probeActivated = false;
     this.onMessage = null;
+    this.dialogBridge = new DialogBridge({
+      onMessage: (message) => this.onMessage?.(message),
+    });
     this._isCleaningUp = false;
     // CDP session 健康检查节流
     this._cdpLastCheck = 0;
@@ -113,6 +117,7 @@ export class BrowserClient extends EventEmitter {
 
       // 清理旧页面的 CDP session（避免泄漏）
       if (this.cdpSession && this._cdpSessionPage && this._cdpSessionPage !== newPage) {
+        await this.closeDialog();
         await this.cdpSession.detach().catch(() => {});
         this.cdpSession = null;
         this._cdpSessionPage = null;
@@ -201,6 +206,22 @@ export class BrowserClient extends EventEmitter {
     this.hookScript = source;
     this.probeActivated = true;
     this.mode = 'probe';
+  }
+
+  async openDialog() {
+    if (!this.page) throw new Error('Browser is not launched');
+    const cdp = await this.getCDPSession();
+    if (!cdp) throw new Error('CDP session unavailable');
+    await this.dialogBridge.open({ page: this.page, cdp });
+    return true;
+  }
+
+  async closeDialog() {
+    await this.dialogBridge.close();
+  }
+
+  async sendDialogMessage(payload) {
+    return this.dialogBridge.send(payload);
   }
 
   /**
@@ -307,6 +328,8 @@ export class BrowserClient extends EventEmitter {
     this._isCleaningUp = true;
 
     try {
+      await this.closeDialog();
+
       // 停止拦截器
       if (this.networkInterceptor) {
         await this.networkInterceptor.stop?.().catch(() => {});

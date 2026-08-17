@@ -40,7 +40,7 @@ test('Agent plugin registers the complete shared Catalog and one invariant promp
 
   agentPlugin.apply(ctx)
 
-  assert.equal(DEEPSPIDER_TOOL_COUNT, 51)
+  assert.equal(DEEPSPIDER_TOOL_COUNT, deepSpiderCatalog.length)
   assert.equal(ctx.registrations.length, DEEPSPIDER_TOOL_COUNT)
   assert.deepEqual(
     ctx.registrations.map(({ name }) => name),

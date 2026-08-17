@@ -27,6 +27,8 @@ test('manifest has the exact direct runtime dependency surface', () => {
   assert.deepEqual(Object.keys(root.dependencies).sort(), [
     '@deepseek-ai/cordis',
     '@deepseek-ai/dsh',
+    '@deepseek-ai/dsh-host-apiproxy',
+    '@deepseek-ai/dsh-llm',
     '@deepseek-ai/dsh-tools',
     '@modelcontextprotocol/sdk',
     'cycletls',
@@ -51,6 +53,8 @@ test('manifest declares the Node floor required by jsdom 30', () => {
 test('manifest declares the native DSH package channel policy', () => {
   assert.equal(root.dependencies['@deepseek-ai/cordis'], 'latest')
   assert.equal(root.dependencies['@deepseek-ai/dsh'], 'latest')
+  assert.equal(root.dependencies['@deepseek-ai/dsh-host-apiproxy'], 'latest')
+  assert.equal(root.dependencies['@deepseek-ai/dsh-llm'], 'latest')
   assert.equal(root.dependencies['@deepseek-ai/dsh-tools'], 'next')
 })
 

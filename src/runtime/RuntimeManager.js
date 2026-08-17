@@ -46,9 +46,9 @@ function combinedSignal(first, second) {
   return globalThis.AbortSignal.any([first, second])
 }
 
-function defaultRuntimeFactory(agent) {
+function defaultRuntimeFactory(agent, { onDialogMessage } = {}) {
   const paths = ensureSessionPaths(createSessionPaths(agent.id))
-  return new DeepSpiderRuntime({ sessionId: agent.id, paths })
+  return new DeepSpiderRuntime({ sessionId: agent.id, paths, onDialogMessage })
 }
 
 export class RuntimeManager {
@@ -63,6 +63,34 @@ export class RuntimeManager {
     this._inFlightDisposals = new Set()
     this._disposalsById = new Map()
     this._closePromise = null
+    this._dialogHandler = null
+  }
+
+  setDialogHandler(handler) {
+    if (handler != null && typeof handler !== 'function') {
+      throw new TypeError('Dialog handler must be a function')
+    }
+    this._dialogHandler = handler
+  }
+
+  handleDialogMessage(event) {
+    if (!event || typeof event.sessionId !== 'string' || !event.message) {
+      throw new TypeError('Dialog event requires sessionId and message')
+    }
+    return this._dialogHandler?.(event)
+  }
+
+  async sendDialog(sessionId, payload, { open = false } = {}) {
+    const entry = this.entries.get(String(sessionId))
+    if (!entry?.runtimePromise) return false
+    let runtime
+    try {
+      runtime = await entry.runtimePromise
+    } catch {
+      return false
+    }
+    if (typeof runtime.sendDialog !== 'function') return false
+    return runtime.sendDialog(payload, { open })
   }
 
   async get(agent, { signal } = {}) {
@@ -192,7 +220,13 @@ export class RuntimeManager {
     if (!entry.runtimePromise) {
       const creation = Promise.resolve().then(() => this.runtimeFactory(
         entry.ownerAgent,
-        { signal: entry.abortController.signal },
+        {
+          signal: entry.abortController.signal,
+          onDialogMessage: (message) => this.handleDialogMessage({
+            sessionId: entry.id,
+            message,
+          }),
+        },
       ))
       entry.runtimePromise = creation.then((runtime) => {
         if (!runtime || typeof runtime.close !== 'function') {

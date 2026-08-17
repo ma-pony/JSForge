@@ -155,6 +155,50 @@ test('RuntimeManager creates a Runtime lazily', async () => {
   assert.equal(creations, 1)
 })
 
+test('Dialog messages and output stay on an already-created exact Session Runtime', async () => {
+  const handled = []
+  const sent = []
+  let creations = 0
+  let factoryOptions
+  const runtime = {
+    close: async () => {},
+    sendDialog: async (payload, options) => {
+      sent.push([payload, options])
+      return true
+    },
+  }
+  const manager = new RuntimeManager({
+    runtimeFactory: async (_agent, options) => {
+      creations += 1
+      factoryOptions = options
+      return runtime
+    },
+  })
+  manager.setDialogHandler((event) => handled.push(event))
+
+  assert.equal(await manager.sendDialog('alpha', { type: 'assistant', text: 'ignored' }), false)
+  assert.equal(creations, 0)
+
+  await manager.get({ id: 'alpha' })
+  await factoryOptions.onDialogMessage({ type: 'chat', text: 'analyze' })
+  assert.deepEqual(handled, [{
+    sessionId: 'alpha',
+    message: { type: 'chat', text: 'analyze' },
+  }])
+
+  assert.equal(await manager.sendDialog(
+    'alpha',
+    { type: 'question/requested', rpcId: 'rpc-1' },
+    { open: true },
+  ), true)
+  assert.deepEqual(sent, [[
+    { type: 'question/requested', rpcId: 'rpc-1' },
+    { open: true },
+  ]])
+  assert.equal(await manager.sendDialog('beta', { type: 'status' }), false)
+  assert.equal(creations, 1)
+})
+
 test('concurrent first calls for one exact Agent ID share one creation promise', async () => {
   const creation = deferred()
   let creations = 0

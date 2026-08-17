@@ -52,6 +52,7 @@ export class DeepSpiderRuntime {
     browserFactory = ({ dataStore }) => new BrowserClient({ dataStore }),
     dataStoreFactory = ({ paths }) => new DataStore({ root: paths.data }),
     env = process.env,
+    onDialogMessage = null,
   }) {
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       throw new TypeError('sessionId must be a non-empty string')
@@ -69,6 +70,7 @@ export class DeepSpiderRuntime {
     this.browserFactory = browserFactory
     this.dataStoreFactory = dataStoreFactory
     this.dataStore = dataStoreFactory({ sessionId, paths, env })
+    this.onDialogMessage = onDialogMessage
 
     this.browserClient = null
     this.page = null
@@ -202,6 +204,12 @@ export class DeepSpiderRuntime {
     return waitFor(Promise.resolve(client.navigate(url, options)), { signal })
   }
 
+  async sendDialog(payload, { open = false } = {}) {
+    if (!this.browserClient) return false
+    if (open) await this.browserClient.openDialog()
+    return this.browserClient.sendDialogMessage(payload)
+  }
+
   setActiveFrameContext(frameId, executionContextId) {
     this.activeFrame = {
       frameId: frameId || null,
@@ -270,6 +278,7 @@ export class DeepSpiderRuntime {
       if (!client || typeof client.launch !== 'function') {
         throw new TypeError('browserFactory must return a BrowserClient')
       }
+      client.onMessage = (message) => this.onDialogMessage?.(message)
       this._pendingBrowser = client
       await client.launch({
         headless: this.env.DEEPSPIDER_HEADLESS === 'true',
