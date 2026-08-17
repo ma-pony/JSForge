@@ -41,7 +41,8 @@ try {
 
   for (const requiredPath of [
     layout.dshBinary,
-    layout.patchPath,
+    layout.sourcePatch,
+    layout.targetPatch,
     path.join(layout.sourcePreset, 'agent.cordis.yml'),
     layout.agentPluginPath,
     layout.hostPluginPath,
@@ -53,6 +54,13 @@ try {
     assert.equal(requiredPath.startsWith(projectRoot), false, `packed path escaped to checkout: ${requiredPath}`)
   }
   assert.equal(layout.dshBinary.includes(`${path.sep}.bin${path.sep}`), false)
+  const managedPatch = fs.readFileSync(layout.targetPatch, 'utf8')
+  const managedPreset = fs.readFileSync(path.join(layout.targetPreset, 'agent.cordis.yml'), 'utf8')
+  assert.doesNotMatch(managedPatch, /DEEPSPIDER_HOST_PLUGIN_PATH/)
+  assert.doesNotMatch(managedPreset, /DEEPSPIDER_AGENT_PLUGIN_PATH/)
+  assert.match(managedPreset, /disabled: !!js process\.platform/)
+  assert.equal(managedPatch.includes(JSON.stringify(layout.hostPluginPath)), true)
+  assert.equal(managedPreset.includes(JSON.stringify(layout.agentPluginPath)), true)
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }

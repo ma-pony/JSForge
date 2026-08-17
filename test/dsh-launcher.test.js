@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -26,7 +26,14 @@ function makeInstalledPackage() {
   fs.mkdirSync(path.join(packageRoot, 'src', 'dsh'), { recursive: true })
   fs.mkdirSync(path.join(dshPackageRoot, 'lib'), { recursive: true })
   fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'deepspider', type: 'module' }))
-  fs.writeFileSync(path.join(packageRoot, 'dsh', 'cordis.patch.yml'), '[]\n')
+  fs.writeFileSync(
+    path.join(packageRoot, 'dsh', 'cordis.patch.yml'),
+    '- insert:\n    - id: deepspider-host\n      name: !!js process.env.DEEPSPIDER_HOST_PLUGIN_PATH\n'
+  )
+  fs.writeFileSync(
+    path.join(packageRoot, 'dsh', 'agent-presets', 'spider', 'agent.cordis.yml'),
+    "- id: tool-bash\n  name: '@deepseek-ai/dsh-tool-bash'\n  disabled: !!js process.platform === 'win32'\n\n- id: deepspider-agent\n  name: !!js process.env.DEEPSPIDER_AGENT_PLUGIN_PATH\n"
+  )
   fs.writeFileSync(path.join(packageRoot, 'dsh', 'agent-presets', 'spider', 'preset.yml'), 'name: Spider\n')
   fs.writeFileSync(path.join(packageRoot, 'skills', 'deepspider', 'SKILL.md'), '# DeepSpider\n')
   fs.writeFileSync(path.join(packageRoot, 'src', 'dsh', 'host-plugin.js'), '')
@@ -69,7 +76,8 @@ test('installed layout uses package-root assets and DSH_HOME managed targets', (
   const dshHome = path.join(fixture.tempRoot, 'dsh-home')
   try {
     const layout = resolveDshLayout({ packageRoot: fixture.packageRoot, env: { DSH_HOME: dshHome } })
-    assert.equal(layout.patchPath, path.join(fixture.packageRoot, 'dsh', 'cordis.patch.yml'))
+    assert.equal(layout.sourcePatch, path.join(fixture.packageRoot, 'dsh', 'cordis.patch.yml'))
+    assert.equal(layout.targetPatch, path.join(dshHome, '.deepspider', 'cordis.patch.yml'))
     assert.equal(layout.sourcePreset, path.join(fixture.packageRoot, 'dsh', 'agent-presets', 'spider'))
     assert.equal(layout.targetPreset, path.join(dshHome, '.agent-presets', 'spider'))
     assert.equal(layout.sourceSkill, path.join(fixture.packageRoot, 'skills', 'deepspider'))
@@ -98,6 +106,13 @@ test('asset sync exactly replaces managed directories and preserves unrelated DS
 
     assert.equal(fs.existsSync(path.join(layout.targetPreset, 'stale.yml')), false)
     assert.equal(fs.existsSync(path.join(layout.targetSkill, 'stale.md')), false)
+    const managedPatch = fs.readFileSync(layout.targetPatch, 'utf8')
+    const managedPreset = fs.readFileSync(path.join(layout.targetPreset, 'agent.cordis.yml'), 'utf8')
+    assert.equal(managedPatch.includes('DEEPSPIDER_HOST_PLUGIN_PATH'), false)
+    assert.equal(managedPreset.includes('DEEPSPIDER_AGENT_PLUGIN_PATH'), false)
+    assert.equal(managedPreset.includes("disabled: !!js process.platform === 'win32'"), true)
+    assert.equal(managedPatch.includes(JSON.stringify(layout.hostPluginPath)), true)
+    assert.equal(managedPreset.includes(JSON.stringify(layout.agentPluginPath)), true)
     assert.equal(fs.readFileSync(path.join(layout.targetPreset, 'preset.yml'), 'utf8'), 'name: Spider\n')
     assert.equal(fs.readFileSync(path.join(layout.targetSkill, 'SKILL.md'), 'utf8'), '# DeepSpider\n')
     assert.equal(fs.readFileSync(path.join(dshHome, 'profiles', 'custom', 'keep.yml'), 'utf8'), 'keep')
@@ -107,7 +122,7 @@ test('asset sync exactly replaces managed directories and preserves unrelated DS
   }
 })
 
-test('launch spec uses exact DSH web argv, inherited stdio, YOLO, and installed plugin paths', () => {
+test('launch spec uses managed patch argv, inherited stdio, and YOLO without forwarding verbose', () => {
   const fixture = makeInstalledPackage()
   const dshHome = path.join(fixture.tempRoot, 'dsh-home')
   try {
@@ -122,16 +137,15 @@ test('launch spec uses exact DSH web argv, inherited stdio, YOLO, and installed 
       fs.realpathSync(path.join(fixture.dshPackageRoot, 'lib', 'bin.js')),
       'web',
       '--patch',
-      path.join(fixture.packageRoot, 'dsh', 'cordis.patch.yml'),
+      path.join(dshHome, '.deepspider', 'cordis.patch.yml'),
       '--port',
       '0',
-      '--verbose',
     ])
     assert.equal(launch.options.shell, false)
     assert.equal(launch.options.stdio, 'inherit')
     assert.equal(launch.options.env.DSH_PERMISSION_MODE, 'danger-full-access')
-    assert.equal(launch.options.env.DEEPSPIDER_HOST_PLUGIN_PATH, path.join(fixture.packageRoot, 'src', 'dsh', 'host-plugin.js'))
-    assert.equal(launch.options.env.DEEPSPIDER_AGENT_PLUGIN_PATH, path.join(fixture.packageRoot, 'src', 'dsh', 'agent-plugin.js'))
+    assert.equal(launch.options.env.DEEPSPIDER_HOST_PLUGIN_PATH, undefined)
+    assert.equal(launch.options.env.DEEPSPIDER_AGENT_PLUGIN_PATH, undefined)
   } finally {
     fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
   }
@@ -144,8 +158,30 @@ test('launch spec preserves explicit permission mode and omits optional argv', (
       packageRoot: fixture.packageRoot,
       env: { DSH_HOME: path.join(fixture.tempRoot, 'home'), DSH_PERMISSION_MODE: 'read-only' },
     })
-    assert.deepEqual(launch.args.slice(-3), ['web', '--patch', path.join(fixture.packageRoot, 'dsh', 'cordis.patch.yml')])
+    assert.deepEqual(launch.args.slice(-3), ['web', '--patch', path.join(fixture.tempRoot, 'home', '.deepspider', 'cordis.patch.yml')])
     assert.equal(launch.options.env.DSH_PERMISSION_MODE, 'read-only')
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('verbose logs one DeepSpider startup line without changing DSH argv', async () => {
+  const fixture = makeInstalledPackage()
+  const child = new FakeChild()
+  const messages = []
+  try {
+    const running = startDshAgent({
+      packageRoot: fixture.packageRoot,
+      env: { DSH_HOME: path.join(fixture.tempRoot, 'verbose-home') },
+      port: 0,
+      verbose: true,
+      log: (message) => messages.push(message),
+      spawnImpl: () => child,
+    })
+    assert.equal(messages.length, 1)
+    assert.match(messages[0], /DeepSpider.*DSH Web.*port 0/i)
+    child.emit('exit', 0, null)
+    assert.equal(await running.closed, 0)
   } finally {
     fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
   }
@@ -220,5 +256,61 @@ test('agent rejects removed and malformed options before spawning DSH', () => {
     })
     assert.equal(result.status, 1)
     assert.match(result.stderr, /agent:/)
+  }
+})
+
+test('real verbose CLI starts DSH Web and creates a Spider Session', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-dsh-web-session-'))
+  const child = spawn(process.execPath, [path.join(projectRoot, 'bin', 'cli.js'), 'agent', '--port', '0', '--verbose'], {
+    cwd: projectRoot,
+    env: { ...process.env, DSH_HOME: path.join(tempRoot, 'dsh-home') },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => { stdout += chunk })
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+
+  try {
+    const webUrl = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`timed out waiting for DSH Web\nstdout:\n${stdout}\nstderr:\n${stderr}`)), 15000)
+      const inspect = () => {
+        const match = stdout.match(/dsh web: (http:\/\/127\.0\.0\.1:\d+)/)
+        if (!match) return
+        clearTimeout(timer)
+        resolve(match[1])
+      }
+      child.stdout.on('data', inspect)
+      child.once('exit', (code, signal) => {
+        clearTimeout(timer)
+        reject(new Error(`DSH Web exited before listening (${code ?? signal})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
+      })
+    })
+    const response = await fetch(`${webUrl}/api/session.create`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: webUrl,
+      },
+      body: JSON.stringify({
+        type: 'client-request',
+        rpcId: '11111111-1111-4111-8111-111111111111',
+        method: 'session.create',
+        payload: { cwd: projectRoot },
+      }),
+    })
+    assert.equal(response.status, 200)
+    const envelope = await response.json()
+    assert.equal(envelope.result.ok, true)
+    assert.equal(envelope.result.value.agentPreset, 'spider')
+    assert.equal(stderr.match(/DeepSpider.*DSH Web.*port 0/gi)?.length, 1)
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise((resolve) => child.once('exit', resolve))
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true })
   }
 })

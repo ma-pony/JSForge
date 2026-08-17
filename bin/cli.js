@@ -51,7 +51,7 @@ switch (first) {
 
 选项:
   --port <number>  监听端口（允许 0 由系统分配）
-  --verbose        显示 DSH 详细日志
+  --verbose        显示 DeepSpider 启动信息
 `.trim());
       break;
     }
@@ -130,7 +130,7 @@ switch (first) {
     console.log('Commands:');
     console.log('  deepspider agent                 Start native DSH Web');
     console.log('  deepspider agent --port <number> Set DSH Web port');
-    console.log('  deepspider agent --verbose       Verbose logging');
+    console.log('  deepspider agent --verbose       Show DeepSpider startup info');
     console.log('  deepspider mcp                   Start MCP server (for Claude Code)');
     console.log('  deepspider fetch <url>           Quick HTTP request');
     console.log('  deepspider update                Check for updates');

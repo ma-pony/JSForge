@@ -24,7 +24,8 @@ export function resolveDshLayout({ packageRoot = defaultPackageRoot, env = proce
     dshBinary: resolveDshBinary({
       packageJsonPath: packageRequire.resolve('@deepseek-ai/dsh/package.json'),
     }),
-    patchPath: path.join(packageRoot, 'dsh', 'cordis.patch.yml'),
+    sourcePatch: path.join(packageRoot, 'dsh', 'cordis.patch.yml'),
+    targetPatch: path.join(dshHome, '.deepspider', 'cordis.patch.yml'),
     sourcePreset: path.join(packageRoot, 'dsh', 'agent-presets', 'spider'),
     targetPreset: path.join(dshHome, '.agent-presets', 'spider'),
     sourceSkill: path.join(packageRoot, 'skills', 'deepspider'),
@@ -40,21 +41,38 @@ function replaceDirectory(source, target) {
   fs.cpSync(source, target, { recursive: true })
 }
 
+function materializePluginPath(source, target, placeholder, pluginPath) {
+  const template = fs.readFileSync(source, 'utf8')
+  if (!template.includes(placeholder)) throw new Error(`${source} does not contain ${placeholder}`)
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, template.replace(placeholder, JSON.stringify(pluginPath)))
+}
+
 export function syncManagedDshAssets(layout) {
   replaceDirectory(layout.sourcePreset, layout.targetPreset)
   replaceDirectory(layout.sourceSkill, layout.targetSkill)
+  materializePluginPath(
+    layout.sourcePatch,
+    layout.targetPatch,
+    '!!js process.env.DEEPSPIDER_HOST_PLUGIN_PATH',
+    layout.hostPluginPath
+  )
+  materializePluginPath(
+    path.join(layout.sourcePreset, 'agent.cordis.yml'),
+    path.join(layout.targetPreset, 'agent.cordis.yml'),
+    '!!js process.env.DEEPSPIDER_AGENT_PLUGIN_PATH',
+    layout.agentPluginPath
+  )
 }
 
 export function buildDshLaunch({
   port,
-  verbose = false,
   packageRoot = defaultPackageRoot,
   env = process.env,
 } = {}) {
   const layout = resolveDshLayout({ packageRoot, env })
-  const args = [layout.dshBinary, 'web', '--patch', layout.patchPath]
+  const args = [layout.dshBinary, 'web', '--patch', layout.targetPatch]
   if (port !== undefined) args.push('--port', String(port))
-  if (verbose) args.push('--verbose')
   return {
     command: process.execPath,
     args,
@@ -64,8 +82,6 @@ export function buildDshLaunch({
       env: {
         ...env,
         DSH_PERMISSION_MODE: env.DSH_PERMISSION_MODE || 'danger-full-access',
-        DEEPSPIDER_HOST_PLUGIN_PATH: layout.hostPluginPath,
-        DEEPSPIDER_AGENT_PLUGIN_PATH: layout.agentPluginPath,
       },
     },
     layout,
@@ -78,9 +94,19 @@ function signalExitCode(signal) {
 }
 
 export function startDshAgent(options = {}) {
-  const { spawnImpl = spawn, signal, ...launchOptions } = options
+  const {
+    spawnImpl = spawn,
+    signal,
+    verbose = false,
+    log = console.error,
+    ...launchOptions
+  } = options
   const launch = buildDshLaunch(launchOptions)
   syncManagedDshAssets(launch.layout)
+  if (verbose) {
+    const portLabel = launchOptions.port === undefined ? '' : ` on port ${launchOptions.port}`
+    log(`[DeepSpider] starting DSH Web${portLabel}`)
+  }
   const child = spawnImpl(launch.command, launch.args, launch.options)
   let settled = false
   let closePromise

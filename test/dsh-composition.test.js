@@ -7,16 +7,17 @@ import { createRequire } from 'node:module'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
+import { resolveDshLayout, syncManagedDshAssets } from '../src/dsh/launcher.js'
+
 const projectRoot = fileURLToPath(new URL('..', import.meta.url))
 const dshPackageJsonPath = createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')
 const dshRequire = createRequire(dshPackageJsonPath)
 const yaml = dshRequire('js-yaml')
-function makeSchema(resolveEnv = false) {
+function makeSchema() {
   const sourceJsType = new yaml.Type('tag:yaml.org,2002:js', {
     kind: 'scalar',
     construct(source) {
-      const envMatch = source.trim().match(/^process\.env\.([A-Z0-9_]+)$/)
-      return resolveEnv && envMatch ? process.env[envMatch[1]] : source
+      return source
     },
   })
   return yaml.DEFAULT_SCHEMA.extend([sourceJsType])
@@ -93,33 +94,28 @@ test('package patch mounts the Host plugin and selects the spider Preset', () =>
   ])
 })
 
-test('real DSH loader composes the Host plugin without losing Web services', () => {
+test('real DSH loader consumes the materialized managed patch without losing Web services', () => {
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-dsh-composition-'))
   const dshPackage = JSON.parse(fs.readFileSync(dshPackageJsonPath, 'utf8'))
   const dshBinary = path.resolve(path.dirname(dshPackageJsonPath), dshPackage.bin.dsh)
   const hostPluginPath = path.join(projectRoot, 'src', 'dsh', 'host-plugin.js')
-  const agentPluginPath = path.join(projectRoot, 'src', 'dsh', 'agent-plugin.js')
-  const previousHostPath = process.env.DEEPSPIDER_HOST_PLUGIN_PATH
-  const previousAgentPath = process.env.DEEPSPIDER_AGENT_PLUGIN_PATH
 
   try {
-    process.env.DEEPSPIDER_HOST_PLUGIN_PATH = hostPluginPath
-    process.env.DEEPSPIDER_AGENT_PLUGIN_PATH = agentPluginPath
+    const layout = resolveDshLayout({ env: { DSH_HOME: tempHome } })
+    syncManagedDshAssets(layout)
     const dumped = execFileSync(
       process.execPath,
-      [dshBinary, 'web', '--patch', path.join(projectRoot, 'dsh', 'cordis.patch.yml'), '--dump-config'],
+      [dshBinary, 'web', '--patch', layout.targetPatch, '--dump-config'],
       {
         cwd: projectRoot,
         encoding: 'utf8',
         env: {
           ...process.env,
           DSH_HOME: tempHome,
-          DEEPSPIDER_HOST_PLUGIN_PATH: hostPluginPath,
-          DEEPSPIDER_AGENT_PLUGIN_PATH: agentPluginPath,
         },
       }
     )
-    const rows = yaml.load(dumped, { schema: makeSchema(true) })
+    const rows = yaml.load(dumped, { schema: makeSchema() })
     const byId = new Map(rows.map((row) => [row.id, row]))
 
     assert.equal(byId.get('deepspider-host').name, hostPluginPath)
@@ -130,10 +126,6 @@ test('real DSH loader composes the Host plugin without losing Web services', () 
     assert.equal(byId.get('permission').name, '@deepseek-ai/dsh-permission-presets')
     assert.equal(byId.get('agent-default-model').name, '@deepseek-ai/dsh-agent-default-model')
   } finally {
-    if (previousHostPath === undefined) delete process.env.DEEPSPIDER_HOST_PLUGIN_PATH
-    else process.env.DEEPSPIDER_HOST_PLUGIN_PATH = previousHostPath
-    if (previousAgentPath === undefined) delete process.env.DEEPSPIDER_AGENT_PLUGIN_PATH
-    else process.env.DEEPSPIDER_AGENT_PLUGIN_PATH = previousAgentPath
     fs.rmSync(tempHome, { recursive: true, force: true })
   }
 })
