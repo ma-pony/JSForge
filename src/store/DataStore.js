@@ -6,13 +6,9 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { writeFile, readFile, rm } from 'fs/promises';
-import { join, resolve, sep } from 'path';
+import { isAbsolute, join, resolve, sep } from 'path';
 import { createHash } from 'crypto';
-import { PATHS, ensureDir } from '../config/paths.js';
-
-const DATA_DIR = PATHS.DATA_DIR;
-const SITES_DIR = PATHS.SITES_DIR;
-const GLOBAL_INDEX = join(DATA_DIR, 'index.json');
+import { ensureSecureDir } from '../config/paths.js';
 
 // 存储配置
 const STORAGE_CONFIG = {
@@ -141,7 +137,14 @@ function getSiteSearchIndex(searchIndex, site) {
 }
 
 export class DataStore {
-  constructor() {
+  constructor({ root } = {}) {
+    if (typeof root !== 'string' || root.length === 0 || !isAbsolute(root)) {
+      throw new TypeError('root must be a non-empty absolute path');
+    }
+
+    this.root = root;
+    this.sitesDir = join(root, 'sites');
+    this.globalIndexPath = join(root, 'index.json');
     // 全局索引：站点列表
     this.globalIndex = {
       sites: [],  // { hostname, lastAccess, responseCount, scriptCount }
@@ -159,8 +162,8 @@ export class DataStore {
     // 索引按需增量填充（saveResponse/saveScript 时写入），不预加载
     this.searchIndex = new Map();
 
-    ensureDir(DATA_DIR);
-    ensureDir(SITES_DIR);
+    ensureSecureDir(this.root);
+    ensureSecureDir(this.sitesDir);
     this.loadGlobalIndex();
   }
 
@@ -239,8 +242,8 @@ export class DataStore {
 
   loadGlobalIndex() {
     try {
-      if (existsSync(GLOBAL_INDEX)) {
-        const data = JSON.parse(readFileSync(GLOBAL_INDEX, 'utf-8'));
+      if (existsSync(this.globalIndexPath)) {
+        const data = JSON.parse(readFileSync(this.globalIndexPath, 'utf-8'));
         // 确保 sites 数组存在（兼容旧格式）
         this.globalIndex = {
           sites: Array.isArray(data.sites) ? data.sites : []
@@ -253,7 +256,7 @@ export class DataStore {
   }
 
   async saveGlobalIndex() {
-    await writeFile(GLOBAL_INDEX, JSON.stringify(this.globalIndex, null, 2));
+    await writeFile(this.globalIndexPath, JSON.stringify(this.globalIndex, null, 2), { mode: 0o600 });
   }
 
   /**
@@ -262,8 +265,8 @@ export class DataStore {
    */
   getSiteDir(site) {
     const safe = sanitizeHostname(site);
-    const dir = join(SITES_DIR, safe);
-    const baseResolved = resolve(SITES_DIR);
+    const dir = join(this.sitesDir, safe);
+    const baseResolved = resolve(this.sitesDir);
     const dirResolved = resolve(dir);
     if (dirResolved !== baseResolved && !dirResolved.startsWith(baseResolved + sep)) {
       throw new Error(`Invalid site name (path escape): ${site}`);
@@ -312,8 +315,8 @@ export class DataStore {
     if (!index) return;
 
     const siteDir = this.getSiteDir(site);
-    ensureDir(siteDir);
-    await writeFile(join(siteDir, 'index.json'), JSON.stringify(index, null, 2));
+    ensureSecureDir(siteDir);
+    await writeFile(join(siteDir, 'index.json'), JSON.stringify(index, null, 2), { mode: 0o600 });
   }
 
   /**
@@ -371,7 +374,7 @@ export class DataStore {
           try {
             const detail = JSON.parse(await readFile(existing.file, 'utf-8'));
             detail.initiator = initiator;
-            await writeFile(existing.file, JSON.stringify(detail));
+            await writeFile(existing.file, JSON.stringify(detail), { mode: 0o600 });
           } catch { /* 文件读写失败不影响主流程 */ }
         }
         await this.saveSiteIndex(site);
@@ -379,7 +382,7 @@ export class DataStore {
       } else {
         const siteDir = this.getSiteDir(site);
         const responsesDir = join(siteDir, 'responses', path);
-        ensureDir(responsesDir);
+        ensureSecureDir(responsesDir);
 
         // 生成可读文件名（使用当前索引长度作为序号）
         const readableName = getReadableFilename(url, 'response', method);
@@ -393,7 +396,7 @@ export class DataStore {
           pageUrl, timestamp, initiator,
         });
 
-        await writeFile(file, content);
+        await writeFile(file, content, { mode: 0o600 });
 
         index.responses.push({
           id, url, path, method, status,
@@ -452,14 +455,14 @@ export class DataStore {
       } else {
         const siteDir = this.getSiteDir(site);
         const scriptsDir = join(siteDir, 'scripts');
-        ensureDir(scriptsDir);
+        ensureSecureDir(scriptsDir);
 
         const readableName = getReadableFilename(url, 'script');
         const seq = String(index.scripts.length).padStart(3, '0');
         const id = `${readableName}_${seq}`;
         const file = join(scriptsDir, `${id}.js`);
 
-        await writeFile(file, source || '');
+        await writeFile(file, source || '', { mode: 0o600 });
 
         const entry = {
           id, url, type,
@@ -926,16 +929,6 @@ export class DataStore {
 
     return cleaned;
   }
-}
-
-// 单例
-let instance = null;
-
-export function getDataStore() {
-  if (!instance) {
-    instance = new DataStore();
-  }
-  return instance;
 }
 
 export default DataStore;

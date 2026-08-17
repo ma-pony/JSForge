@@ -3,13 +3,14 @@
  * 通过 CDP 捕获 JS 脚本源码，按站点存储到文件系统
  */
 
-import { getDataStore } from '../../store/DataStore.js';
-
 export class ScriptInterceptor {
-  constructor(cdpClient, page) {
+  constructor(cdpClient, page, dataStore) {
+    if (!dataStore) {
+      throw new TypeError('dataStore must be provided');
+    }
     this.client = cdpClient;
     this.page = page;  // Playwright page 对象
-    this.store = getDataStore();
+    this.store = dataStore;
     this.scriptIds = new Set();
     this.onSource = null;  // 回调: (scriptId, scriptSource) => void
   }

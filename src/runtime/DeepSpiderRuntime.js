@@ -1,5 +1,5 @@
 import { BrowserClient } from '../browser/client.js'
-import { getDataStore } from '../store/DataStore.js'
+import { DataStore } from '../store/DataStore.js'
 
 function abortError(reason) {
   if (reason instanceof Error) return reason
@@ -49,8 +49,8 @@ export class DeepSpiderRuntime {
   constructor({
     sessionId,
     paths,
-    browserFactory = () => new BrowserClient(),
-    dataStoreFactory = () => getDataStore(),
+    browserFactory = ({ dataStore }) => new BrowserClient({ dataStore }),
+    dataStoreFactory = ({ paths }) => new DataStore({ root: paths.data }),
     env = process.env,
   }) {
     if (typeof sessionId !== 'string' || sessionId.length === 0) {

@@ -9,11 +9,14 @@ import { getDefaultHookScript } from './defaultHooks.js';
 import { NetworkInterceptor } from './interceptors/NetworkInterceptor.js';
 import { ScriptInterceptor } from './interceptors/ScriptInterceptor.js';
 import { AntiDebugInterceptor } from './interceptors/AntiDebugInterceptor.js';
-import { getDataStore } from '../store/DataStore.js';
 
 export class BrowserClient extends EventEmitter {
-  constructor() {
+  constructor({ dataStore } = {}) {
     super();
+    if (!dataStore) {
+      throw new TypeError('dataStore must be provided');
+    }
+    this.dataStore = dataStore;
     this.browser = null;
     this.context = null;
     this.page = null;
@@ -35,8 +38,7 @@ export class BrowserClient extends EventEmitter {
    */
   async launch(options = {}) {
     // 启动新会话
-    const dataStore = getDataStore();
-    dataStore.startSession();
+    this.dataStore.startSession();
 
     const {
       headless = false,
@@ -165,8 +167,8 @@ export class BrowserClient extends EventEmitter {
       let antiDebugInterceptor = null;
 
       if (!this._disableInterceptors) {
-        networkInterceptor = new NetworkInterceptor(cdp, page);
-        scriptInterceptor = new ScriptInterceptor(cdp, page);
+        networkInterceptor = new NetworkInterceptor(cdp, page, this.dataStore);
+        scriptInterceptor = new ScriptInterceptor(cdp, page, this.dataStore);
         await networkInterceptor.start();
         await scriptInterceptor.start();
 

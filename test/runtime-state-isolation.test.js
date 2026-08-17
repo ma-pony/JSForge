@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 import { setImmediate } from 'node:timers/promises'
 
 import * as mcpContextModule from '../src/mcp/context.js'
 import { DeepSpiderRuntime } from '../src/runtime/DeepSpiderRuntime.js'
 import { RuntimeManager } from '../src/runtime/RuntimeManager.js'
+import { createSessionPaths } from '../src/runtime/SessionPaths.js'
 import { tools as browserTools } from '../src/tools/groups/browser.js'
 import { tools as debuggerTools } from '../src/tools/groups/debugger.js'
 import { tools as networkTools } from '../src/tools/groups/network.js'
@@ -81,6 +85,29 @@ function createRuntime(sessionId) {
     dataStoreFactory: () => ({ close: async () => {} }),
   })
 }
+
+test('default Runtimes own isolated DataStores and give them to their BrowserClients', (t) => {
+  const sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-runtime-state-'))
+  t.after(() => fs.rmSync(sessionRoot, { recursive: true, force: true }))
+
+  const runtimeA = new DeepSpiderRuntime({
+    sessionId: 'runtime-a',
+    paths: createSessionPaths('runtime-a', { root: sessionRoot }),
+  })
+  const runtimeB = new DeepSpiderRuntime({
+    sessionId: 'runtime-b',
+    paths: createSessionPaths('runtime-b', { root: sessionRoot }),
+  })
+
+  assert.notEqual(runtimeA.dataStore, runtimeB.dataStore)
+  assert.equal(runtimeA.dataStore.root, runtimeA.paths.data)
+  assert.equal(runtimeB.dataStore.root, runtimeB.paths.data)
+
+  const browserA = runtimeA.browserFactory({ dataStore: runtimeA.dataStore })
+  const browserB = runtimeB.browserFactory({ dataStore: runtimeB.dataStore })
+  assert.equal(browserA.dataStore, runtimeA.dataStore)
+  assert.equal(browserB.dataStore, runtimeB.dataStore)
+})
 
 test('MCP contexts expose two real Runtimes whose browser and debugger state is isolated', async () => {
   assert.equal(typeof mcpContextModule.createMcpContext, 'function')

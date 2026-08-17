@@ -3,13 +3,14 @@
  * 通过 CDP 捕获网络请求/响应，按站点存储到文件系统
  */
 
-import { getDataStore } from '../../store/DataStore.js';
-
 export class NetworkInterceptor {
-  constructor(cdpClient, page) {
+  constructor(cdpClient, page, dataStore) {
+    if (!dataStore) {
+      throw new TypeError('dataStore must be provided');
+    }
     this.client = cdpClient;
     this.page = page;  // Playwright page 对象
-    this.store = getDataStore();
+    this.store = dataStore;
     this.pendingRequests = new Map();
     this.wsConnections = new Map();  // requestId -> ws url
   }
