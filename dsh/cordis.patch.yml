@@ -1,0 +1,7 @@
+- insert:
+    - id: deepspider-host
+      name: !!js process.env.DEEPSPIDER_HOST_PLUGIN_PATH
+
+- id: agent-presets
+  config:
+    default: spider

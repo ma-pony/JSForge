@@ -1,6 +1,6 @@
 /**
  * Install one shutdown path for every way an MCP stdio process can stop.
- * stdin EOF is the normal path when the owning OpenCode process exits.
+ * stdin EOF is the normal path when the owning client process exits.
  */
 export function installMcpShutdown({
   stdin = process.stdin,

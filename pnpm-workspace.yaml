@@ -1,4 +1,2 @@
-allowBuilds:
-  opencode-ai: true
 minimumReleaseAgeExclude:
   - '@deepseek-ai/*'

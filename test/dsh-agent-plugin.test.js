@@ -64,7 +64,7 @@ test('Agent prompt keeps the reverse-engineering invariants concise and complete
   assert.match(prompt, /request-level verification/i)
 })
 
-test('Agent plugin is stateless and adds no lifecycle, checkpoint, or evolve_skill surface', () => {
+test('Agent plugin is stateless and adds no lifecycle or checkpoint surface', () => {
   const first = agentContext({ id: 'manager-1', run: async () => {} })
   const second = agentContext({ id: 'manager-2', run: async () => {} })
 
@@ -75,8 +75,6 @@ test('Agent plugin is stateless and adds no lifecycle, checkpoint, or evolve_ski
   assert.notEqual(first.sections, second.sections)
   assert.deepEqual(first.events, [])
   assert.deepEqual(second.events, [])
-  assert.equal(first.registrations.some(({ name }) => name === 'evolve_skill'), false)
-  assert.equal(second.registrations.some(({ name }) => name === 'evolve_skill'), false)
   assert.deepEqual(Object.keys(agentPlugin).sort(), [
     'apply',
     'inject',

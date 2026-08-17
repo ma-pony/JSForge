@@ -328,7 +328,6 @@ test('the central catalog has the exact 51-tool stable group contract', () => {
     'export_rebuild_bundle',
     'analyze_runtime_trace',
   ])
-  assert.equal(names.includes('evolve_skill'), false)
   for (const definition of deepSpiderCatalog) {
     assert.equal(Object.isFrozen(definition), true)
     assert.equal(Object.isFrozen(definition.parameters), true)

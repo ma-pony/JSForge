@@ -8,9 +8,9 @@
   "files": [
     "bin/",
     "src/",
-    "agents/",
-    "plugins/",
+    "dsh/",
     "skills/",
+    "README.md",
     "README_EN.md",
     "requirements-crypto.txt",
     ".env.example"
@@ -58,13 +58,8 @@
     "@deepseek-ai/cordis": "latest",
     "@deepseek-ai/dsh": "latest",
     "@deepseek-ai/dsh-tools": "next",
-    "@deepseek-ai/schemastery": "latest",
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "@opencode-ai/plugin": "1.18.16",
-    "@opencode-ai/sdk": "1.18.16",
     "cycletls": "^2.0.5",
-    "gray-matter": "^4.0.3",
-    "opencode-ai": "1.18.16",
     "patchright": "^1.57.0",
     "zod": "^4.3.6"
   },

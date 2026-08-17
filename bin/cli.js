@@ -22,12 +22,6 @@ switch (first) {
     break;
   }
 
-  case 'config': {
-    const { run } = await import('../src/cli/commands/config.js');
-    run(args.slice(1));
-    break;
-  }
-
   case 'update': {
     const { run } = await import('../src/cli/commands/update.js');
     await run();
@@ -47,65 +41,79 @@ switch (first) {
   }
 
   case 'agent': {
-    // 启动独立 Agent
-    const {
-      reportAgentCleanupError,
-      reportAgentError,
-      selectAgentExitCode,
-      startAgent,
-    } = await import('../src/agent/index.js');
-
     const agentArgs = args.slice(1);
-    const modelIdx = agentArgs.indexOf('--model');
-    const model = modelIdx !== -1 ? agentArgs[modelIdx + 1] : undefined;
-    const verbose = agentArgs.includes('--verbose');
+    if (agentArgs.includes('--help') || agentArgs.includes('-h')) {
+      console.log(`
+用法:
+  deepspider agent [--port <number>] [--verbose]
 
+启动原生 DSH Web，并加载 DeepSpider Spider Preset。
+
+选项:
+  --port <number>  监听端口（允许 0 由系统分配）
+  --verbose        显示 DSH 详细日志
+`.trim());
+      break;
+    }
+
+    let port;
+    let verbose = false;
+    let argumentError;
+    for (let index = 0; index < agentArgs.length; index += 1) {
+      const argument = agentArgs[index];
+      if (argument === '--verbose') {
+        verbose = true;
+        continue;
+      }
+      if (argument === '--port') {
+        const value = agentArgs[index + 1];
+        if (!/^\d+$/.test(value || '') || Number(value) > 65535) {
+          argumentError = '--port 需要 0 到 65535 之间的数字';
+          break;
+        }
+        port = Number(value);
+        index += 1;
+        continue;
+      }
+      argumentError = `不支持的选项 ${argument}`;
+      break;
+    }
+    if (argumentError) {
+      console.error(`agent: ${argumentError}`);
+      process.exitCode = 1;
+      break;
+    }
+
+    const { startDshAgent } = await import('../src/dsh/launcher.js');
     let runtime;
     let signalExitCode;
-    const startupAbortController = new globalThis.AbortController();
-    const reportedCleanupErrors = new Set();
-    const closeRuntime = async () => {
-      try {
-        await runtime?.close();
-      } catch (err) {
-        reportAgentCleanupError(err, reportedCleanupErrors);
-      }
-    };
-    const closeForSignal = async (exitCode, signal) => {
+    const abortController = new globalThis.AbortController();
+    const closeForSignal = (exitCode, signal) => {
+      if (signalExitCode != null) return;
       signalExitCode = exitCode;
       process.exitCode = exitCode;
-      startupAbortController.abort({ signal, exitCode });
-      await closeRuntime();
+      abortController.abort({ signal, exitCode });
     };
-    const onSigint = () => { void closeForSignal(130, 'SIGINT'); };
-    const onSigterm = () => { void closeForSignal(143, 'SIGTERM'); };
+    const onSigint = () => closeForSignal(130, 'SIGINT');
+    const onSigterm = () => closeForSignal(143, 'SIGTERM');
     process.once('SIGINT', onSigint);
     process.once('SIGTERM', onSigterm);
 
     try {
-      runtime = await startAgent({ model, verbose, signal: startupAbortController.signal });
-      if (signalExitCode == null) {
-        const tuiExitCode = await runtime.attachTUI();
-        process.exitCode = selectAgentExitCode(process.exitCode, tuiExitCode);
-      }
+      runtime = startDshAgent({ port, verbose, signal: abortController.signal });
+      const childExitCode = await runtime.closed;
+      process.exitCode = signalExitCode ?? childExitCode;
     } catch (err) {
-      if (err && err.code === 'E_WIZARD_CANCELLED') {
-        if (signalExitCode == null) {
-          process.exitCode = err.exitCode || 130;
-          console.error('');
-          console.error('已取消。');
-        }
-      } else {
-        process.exitCode = reportAgentError(err, {
-          signalExitCode,
-          verbose,
-          reportedCleanupErrors,
-        });
-      }
+      if (signalExitCode == null) console.error(`agent: ${err.message}`);
+      process.exitCode = signalExitCode ?? 1;
     } finally {
       process.removeListener('SIGINT', onSigint);
       process.removeListener('SIGTERM', onSigterm);
-      await closeRuntime();
+      try {
+        await runtime?.close();
+      } catch {
+        // The primary spawn/exit error was already reported above.
+      }
     }
     break;
   }
@@ -120,14 +128,10 @@ switch (first) {
     console.log('DeepSpider - 智能爬虫工程平台');
     console.log('');
     console.log('Commands:');
-    console.log('  deepspider agent                 Start standalone Agent (opencode TUI)');
-    console.log('  deepspider agent --model <id>    Override LLM model');
+    console.log('  deepspider agent                 Start native DSH Web');
+    console.log('  deepspider agent --port <number> Set DSH Web port');
     console.log('  deepspider agent --verbose       Verbose logging');
     console.log('  deepspider mcp                   Start MCP server (for Claude Code)');
-    console.log('  deepspider config list           Show sandbox opencode config');
-    console.log('  deepspider config set-model <m>  Set model in sandbox opencode.json');
-    console.log('  deepspider config auth login     Log in to a provider (passthrough)');
-    console.log('  deepspider config reset          Reset sandbox (re-run init wizard)');
     console.log('  deepspider fetch <url>           Quick HTTP request');
     console.log('  deepspider update                Check for updates');
     console.log('  deepspider --version             Show version');

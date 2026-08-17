@@ -10,18 +10,15 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8')
 }
 
-test('agent and skill make target immutability a hard runtime rule', () => {
-  const agent = read('agents/spider.md')
+test('packaged skill makes target immutability a hard runtime rule', () => {
   const skill = read('skills/deepspider/SKILL.md')
 
-  for (const content of [agent, skill]) {
-    assert.match(content, /target\.js/)
-    assert.match(content, /probe/)
-    assert.match(content, /verify/)
-    assert.match(content, /禁止.*修改.*目标/)
-    assert.match(content, /Proven Facts/)
-  }
-  assert.match(agent, /sessionId.*scriptId.*SHA-256/s)
+  assert.match(skill, /target\.js/)
+  assert.match(skill, /probe/)
+  assert.match(skill, /verify/)
+  assert.match(skill, /禁止.*修改.*目标/)
+  assert.match(skill, /Proven Facts/)
+  assert.match(skill, /sessionId.*scriptId.*SHA-256/s)
   assert.match(skill, /export_rebuild_bundle.*analyze_runtime_trace/s)
 })
 

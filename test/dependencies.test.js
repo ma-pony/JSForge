@@ -5,30 +5,25 @@ import fs from 'node:fs'
 const root = JSON.parse(
   fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')
 )
-const plugin = JSON.parse(
-  fs.readFileSync(
-    new URL('../plugins/deepspider-plugin/package.json', import.meta.url),
-    'utf8'
-  )
-)
 const pnpmWorkspace = fs.readFileSync(
   new URL('../pnpm-workspace.yaml', import.meta.url),
   'utf8'
 )
 
-test('OpenCode packages are pinned to one supported version', () => {
-  assert.equal(root.dependencies['@opencode-ai/sdk'], '1.18.16')
-  assert.equal(root.dependencies['@opencode-ai/plugin'], '1.18.16')
-  assert.equal(root.dependencies['opencode-ai'], '1.18.16')
-  assert.equal(plugin.dependencies['@opencode-ai/plugin'], '1.18.16')
-  assert.equal(plugin.dependencies.zod, root.dependencies.zod)
+test('manifest has the exact direct runtime dependency surface', () => {
+  assert.deepEqual(Object.keys(root.dependencies).sort(), [
+    '@deepseek-ai/cordis',
+    '@deepseek-ai/dsh',
+    '@deepseek-ai/dsh-tools',
+    '@modelcontextprotocol/sdk',
+    'cycletls',
+    'patchright',
+    'zod',
+  ])
 })
 
-test('pnpm build policy allows only the OpenCode runtime build', () => {
-  assert.match(
-    pnpmWorkspace,
-    /^allowBuilds:\n {2}opencode-ai: true\nminimumReleaseAgeExclude:/
-  )
+test('pnpm workspace policy retains only the DSH release-age exclusion', () => {
+  assert.equal(pnpmWorkspace, "minimumReleaseAgeExclude:\n  - '@deepseek-ai/*'\n")
 })
 
 test('pnpm release-age policy covers the current DSH package scope', () => {
@@ -43,7 +38,6 @@ test('manifest declares the native DSH package channel policy', () => {
   assert.equal(root.dependencies['@deepseek-ai/cordis'], 'latest')
   assert.equal(root.dependencies['@deepseek-ai/dsh'], 'latest')
   assert.equal(root.dependencies['@deepseek-ai/dsh-tools'], 'next')
-  assert.equal(root.dependencies['@deepseek-ai/schemastery'], 'latest')
 })
 
 test('manifest pins the package manager used by CI', () => {
@@ -52,6 +46,12 @@ test('manifest pins the package manager used by CI', () => {
 
 test('published package includes the bilingual project readme', () => {
   assert.ok(root.files.includes('README_EN.md'))
+  assert.ok(root.files.includes('README.md'))
+  assert.ok(root.files.includes('dsh/'))
+  assert.ok(root.files.includes('src/'))
+  assert.ok(root.files.includes('skills/'))
+  assert.equal(root.files.includes('agents/'), false)
+  assert.equal(root.files.includes('plugins/'), false)
 })
 
 test('publish jobs use the Node floor and frozen script-free installs', () => {
