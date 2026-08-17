@@ -1,18 +1,22 @@
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 
-import { EnvBridge } from '../../browser/EnvBridge.js'
-import { buildEnvCode } from '../../env/modules/index.js'
+import { SessionEvidenceCollector } from '../../browser/SessionEvidenceCollector.js'
 import {
   createManifest,
   selectCurrentSessionScript,
   validateCallExpression,
   validateTaskId,
 } from '../../rebuild/bundle.js'
-import { buildProbeCode, buildRunnerCode } from '../../rebuild/runtime-template.js'
+import { getChromeBaseline } from '../../rebuild/environment/chrome-baseline.js'
+import { createRecipe } from '../../rebuild/environment/recipe.js'
+import { buildRunnerCode } from '../../rebuild/runtime-template.js'
 import { analyzeTrace, parseTrace } from '../../rebuild/trace.js'
 import { defineDeepSpiderTool } from '../catalog.js'
 import { DeepSpiderToolError } from '../errors.js'
+
+const require = createRequire(import.meta.url)
 
 function failure(error, fallbackCode) {
   if (error instanceof DeepSpiderToolError) throw error
@@ -67,34 +71,39 @@ export const tools = Object.freeze([
         }
 
         const page = await runtime.getPage({ signal })
-        const [pageData, pageUrl] = await Promise.all([
-          new EnvBridge(page).collectPageData(),
-          page.url(),
-        ])
-        const environmentSource = JSON.stringify(pageData, null, 2)
-        const envCode = buildEnvCode(pageData)
+        const sessionState = await new SessionEvidenceCollector(page).collect()
+        const baselineSource = JSON.stringify(getChromeBaseline(), null, 2)
+        const sessionStateSource = JSON.stringify(sessionState, null, 2)
+        const propertyFactsSource = JSON.stringify(runtime.captures?.propertyFacts || [], null, 2)
+        const recipeSource = JSON.stringify(createRecipe(), null, 2)
         const manifest = createManifest({
           sessionId,
           site: script.site,
-          pageUrl,
+          pageUrl: sessionState.page.url,
           scriptId: script.id,
           scriptUrl: script.url,
           targetSource,
-          environmentSource,
+          baselineSource,
+          sessionStateSource,
+          propertyFactsSource,
+          recipeSource,
+          jsdomEntryPath: require.resolve('jsdom'),
           callExpression,
         })
 
         fs.mkdirSync(rebuildDir, { recursive: true, mode: 0o700 })
         fs.mkdirSync(taskDir, { mode: 0o700 })
-        fs.mkdirSync(path.join(taskDir, 'dynamic'), { mode: 0o700 })
+        fs.mkdirSync(path.join(taskDir, 'evidence'), { mode: 0o700 })
+        fs.mkdirSync(path.join(taskDir, 'evidence', 'dynamic'), { mode: 0o700 })
         fs.mkdirSync(path.join(taskDir, 'runs'), { mode: 0o700 })
         writePrivateFile(path.join(taskDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
-        writePrivateFile(path.join(taskDir, 'target.js'), targetSource)
-        writePrivateFile(path.join(taskDir, 'environment.json'), environmentSource)
-        writePrivateFile(path.join(taskDir, 'env.js'), envCode)
-        writePrivateFile(path.join(taskDir, 'probe.js'), buildProbeCode())
+        writePrivateFile(path.join(taskDir, 'target.original.js'), targetSource)
+        writePrivateFile(path.join(taskDir, 'evidence', 'baseline.json'), baselineSource)
+        writePrivateFile(path.join(taskDir, 'evidence', 'session-state.json'), sessionStateSource)
+        writePrivateFile(path.join(taskDir, 'evidence', 'property-facts.json'), propertyFactsSource)
+        writePrivateFile(path.join(taskDir, 'recipe.json'), recipeSource)
+        writePrivateFile(path.join(taskDir, 'transforms.json'), '[]\n')
         writePrivateFile(path.join(taskDir, 'runner.mjs'), buildRunnerCode())
-        writePrivateFile(path.join(taskDir, 'patches.json'), '[]\n')
 
         return {
           success: true,
@@ -105,7 +114,8 @@ export const tools = Object.freeze([
             probe: `node ${path.join(taskDir, 'runner.mjs')} --mode probe`,
             verify: `node ${path.join(taskDir, 'runner.mjs')} --mode verify`,
           },
-          targetModificationAllowed: false,
+          originalImmutable: true,
+          derivedTargetAllowed: true,
         }
       } catch (error) {
         failure(error, 'E_REBUILD_EXPORT')

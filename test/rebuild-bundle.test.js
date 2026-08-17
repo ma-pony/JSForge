@@ -35,7 +35,10 @@ test('rejects scripts that are absent from the current capture session', () => {
 
 test('creates a deterministic immutable manifest', () => {
   const targetSource = 'globalThis.answer = 42;\n'
-  const environmentSource = '{"navigator":{"language":"en-US"}}'
+  const baselineSource = '{"name":"chrome-default"}'
+  const sessionStateSource = '{"source":"patchright-session"}'
+  const propertyFactsSource = '[]'
+  const recipeSource = '{"baseline":"chrome-default"}'
 
   const manifest = createManifest({
     sessionId: 'session-1',
@@ -44,21 +47,29 @@ test('creates a deterministic immutable manifest', () => {
     scriptId: 'script-1',
     scriptUrl: 'https://example.com/app.js',
     targetSource,
-    environmentSource,
+    baselineSource,
+    sessionStateSource,
+    propertyFactsSource,
+    recipeSource,
+    jsdomEntryPath: '/packages/jsdom/lib/api.js',
     callExpression: 'window.answer',
     createdAt: '2026-08-14T00:00:00.000Z',
   })
 
   assert.deepEqual(manifest, {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: 'session-1',
     site: 'example.com',
     pageUrl: 'https://example.com/page',
     scriptId: 'script-1',
     scriptUrl: 'https://example.com/app.js',
-    targetSha256: sha256(targetSource),
-    targetBytes: Buffer.byteLength(targetSource),
-    environmentSha256: sha256(environmentSource),
+    originalTargetSha256: sha256(targetSource),
+    originalTargetBytes: Buffer.byteLength(targetSource),
+    baselineSha256: sha256(baselineSource),
+    sessionStateSha256: sha256(sessionStateSource),
+    propertyFactsSha256: sha256(propertyFactsSource),
+    recipeSha256: sha256(recipeSource),
+    jsdomEntryPath: '/packages/jsdom/lib/api.js',
     callExpression: 'window.answer',
     createdAt: '2026-08-14T00:00:00.000Z',
   })

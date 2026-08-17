@@ -15,7 +15,11 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
   const calls = []
   const source = 'globalThis.answer = 42;\n'
   const pageData = {
-    navigator: {}, screen: {}, location: {}, localStorage: {}, sessionStorage: {}, document: {},
+    source: 'patchright-session',
+    mode: 'observe',
+    page: { url: 'https://example.com/page', title: 'Fixture', referrer: '' },
+    storage: { cookies: [], local: {}, session: {} },
+    document: { html: '<!doctype html><title>Fixture</title>' },
   }
   const store = {
     getSessionId() { return 'session-current' },
@@ -36,15 +40,14 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
   const runtime = {
     dataStore: store,
     paths: { rebuild: rebuildDir },
+    captures: { propertyFacts: [{ path: 'navigator.language', value: 'en-US' }] },
     async getPage() {
       return {
         url: () => 'https://example.com/page',
-        async evaluate(_expression, args) {
-          if (args?.path === 'navigator' || args?.path === 'screen') {
-            return { success: true, data: { properties: {} } }
-          }
-          return {}
-        },
+        title: async () => 'Fixture',
+        content: async () => '<!doctype html><title>Fixture</title>',
+        evaluate: async () => ({ referrer: '', local: {}, session: {} }),
+        context: () => ({ cookies: async () => [] }),
       }
     },
   }
@@ -62,23 +65,33 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
 
   const taskDir = path.join(rebuildDir, 'fixture-task')
   assert.deepEqual(fs.readdirSync(taskDir).sort(), [
-    'dynamic',
-    'env.js',
-    'environment.json',
+    'evidence',
     'manifest.json',
-    'patches.json',
-    'probe.js',
+    'recipe.json',
     'runner.mjs',
     'runs',
-    'target.js',
+    'target.original.js',
+    'transforms.json',
+  ])
+  assert.deepEqual(fs.readdirSync(path.join(taskDir, 'evidence')).sort(), [
+    'baseline.json',
+    'dynamic',
+    'property-facts.json',
+    'session-state.json',
   ])
   const manifest = JSON.parse(fs.readFileSync(path.join(taskDir, 'manifest.json'), 'utf8'))
+  assert.equal(manifest.schemaVersion, 2)
   assert.equal(manifest.sessionId, 'session-current')
   assert.equal(manifest.scriptId, 'script-current')
   assert.equal(manifest.pageUrl, 'https://example.com/page')
-  assert.equal(fs.readFileSync(path.join(taskDir, 'target.js'), 'utf8'), source)
+  assert.equal(fs.readFileSync(path.join(taskDir, 'target.original.js'), 'utf8'), source)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(taskDir, 'evidence', 'session-state.json'), 'utf8')), pageData)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(taskDir, 'evidence', 'property-facts.json'), 'utf8')), runtime.captures.propertyFacts)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(taskDir, 'transforms.json'), 'utf8')), [])
+  assert.equal(result.originalImmutable, true)
+  assert.equal(result.derivedTargetAllowed, true)
   assert.equal(fs.statSync(taskDir).mode & 0o777, 0o700)
-  assert.equal(fs.statSync(path.join(taskDir, 'target.js')).mode & 0o777, 0o600)
+  assert.equal(fs.statSync(path.join(taskDir, 'target.original.js')).mode & 0o777, 0o600)
 
   await assert.rejects(
     definition('export_rebuild_bundle').execute(runtime, {
@@ -90,7 +103,7 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
   )
 })
 
-test('analyzes a stored probe trace without permitting target modification', async () => {
+test('analyzes a stored probe trace while preserving the original and allowing recorded derivatives', async () => {
   const rebuildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-trace-tool-'))
   const runDir = path.join(rebuildDir, 'fixture-task', 'runs', 'run-1')
   fs.mkdirSync(runDir, { recursive: true })
@@ -104,7 +117,8 @@ test('analyzes a stored probe trace without permitting target modification', asy
   }, undefined)
 
   assert.equal(result.category, 'source-integrity')
-  assert.equal(result.targetModificationAllowed, false)
+  assert.equal(result.originalImmutable, true)
+  assert.equal(result.derivedTargetAllowed, true)
 })
 
 test('rejects a truncated capture instead of signing partial bytes as the target', async () => {

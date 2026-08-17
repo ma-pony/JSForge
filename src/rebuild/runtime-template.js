@@ -1,3 +1,5 @@
+import { getEnvironmentInstallerFunctionSource } from './environment/compiler.js'
+
 export function buildProbeCode() {
   return `
 (function installDeepSpiderProbe(emit) {
@@ -42,10 +44,7 @@ export function buildProbeCode() {
         const result = Reflect.get(target, property, receiver);
         emit({
           category: result === undefined ? 'environment-missing' : 'environment-access',
-          operation: 'get',
-          path: childPath,
-          valueType: typeof result,
-          stack: stack(),
+          operation: 'get', path: childPath, valueType: typeof result, stack: stack(),
         });
         return membrane(result, childPath);
       },
@@ -88,7 +87,12 @@ export function buildProbeCode() {
   };
 
   for (const name of ['navigator', 'document', 'location', 'screen', 'history', 'localStorage', 'sessionStorage']) {
-    if (globalThis[name]) globalThis[name] = membrane(globalThis[name], name);
+    if (!globalThis[name]) continue;
+    try {
+      Object.defineProperty(globalThis, name, {
+        value: membrane(globalThis[name], name), configurable: true, enumerable: true, writable: true,
+      });
+    } catch {}
   }
   emit({ category: 'runtime', operation: 'probe-installed', path: 'globalThis' });
 })
@@ -101,16 +105,23 @@ export function buildRunnerCode(options = {}) {
     throw new TypeError('buildRunnerCode: timeoutMs must be a positive integer')
   }
 
+  const environmentInstallerSource = getEnvironmentInstallerFunctionSource()
+  const probeInstallerSource = buildProbeCode()
+
   return `
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import inspector from 'node:inspector';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const taskDir = path.dirname(fileURLToPath(import.meta.url));
 const runtimeTimeoutMs = ${timeoutMs};
+const environmentInstallerSource = ${JSON.stringify(environmentInstallerSource)};
+const probeInstallerSource = ${JSON.stringify(probeInstallerSource)};
+const require = createRequire(import.meta.url);
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -135,6 +146,59 @@ function readMode(argv) {
 
 function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2), { mode: 0o600 });
+}
+
+function readVerified(relativePath, expectedSha256, code) {
+  const value = fs.readFileSync(path.join(taskDir, relativePath));
+  if (sha256(value) !== expectedSha256) {
+    throw runtimeError(code, relativePath + ' does not match its manifest hash');
+  }
+  return value.toString('utf8');
+}
+
+function selectTarget(manifest) {
+  const originalSource = readVerified('target.original.js', manifest.originalTargetSha256, 'E_TARGET_INTEGRITY');
+  const workingFile = path.join(taskDir, 'target.working.js');
+  const transforms = JSON.parse(fs.readFileSync(path.join(taskDir, 'transforms.json'), 'utf8'));
+  const invalid = () => runtimeError('E_WORKING_TARGET_INTEGRITY', 'target.working.js requires a complete transforms.json hash chain');
+  if (!Array.isArray(transforms)) throw invalid();
+
+  if (!fs.existsSync(workingFile)) {
+    if (transforms.length !== 0) throw invalid();
+    return {
+      source: originalSource,
+      filename: 'target.original.js',
+      sha256: manifest.originalTargetSha256,
+      derived: false,
+    };
+  }
+
+  if (transforms.length === 0) throw invalid();
+  let expectedBefore = manifest.originalTargetSha256;
+  for (const transform of transforms) {
+    if (!transform || typeof transform.reason !== 'string' || transform.reason.length === 0 ||
+        transform.beforeSha256 !== expectedBefore || !/^[a-f0-9]{64}$/.test(transform.afterSha256 || '')) {
+      throw invalid();
+    }
+    expectedBefore = transform.afterSha256;
+  }
+  const workingSource = fs.readFileSync(workingFile, 'utf8');
+  const workingSha256 = sha256(workingSource);
+  if (workingSha256 !== expectedBefore) throw invalid();
+  return { source: workingSource, filename: 'target.working.js', sha256: workingSha256, derived: true };
+}
+
+function compileEffectiveEnvironment(baseline, sessionState, recipe) {
+  return {
+    values: {
+      ...(baseline.values || {}),
+      ...(sessionState.values || {}),
+      ...(recipe.fixedValues || {}),
+    },
+    conceal: [...(baseline.conceal || []), ...(recipe.conceal || [])],
+    handlers: { ...(recipe.handlers || {}) },
+    replay: { ...(recipe.replay || {}) },
+  };
 }
 
 function post(session, method, params = {}) {
@@ -164,26 +228,14 @@ function createContextTraceBridge(metadata) {
     const caller = event.caller || String(event.stack || '')
       .split('\\n')
       .slice(1)
-      .find((line) => !/probe\\.js|env\\.js/.test(line)) || '';
+      .find((line) => !/probe\\.js|environment-installer\\.js|runtime-bootstrap\\.js/.test(line)) || '';
     const key = JSON.stringify([event.category, event.operation, event.path, caller]);
     const existing = traceByKey.get(key);
     if (existing) {
       existing.count += 1;
       return;
     }
-    const entry = {
-      ...event,
-      seq: trace.length + 1,
-      count: 1,
-      caller,
-      sessionId: metadata.sessionId,
-      scriptId: metadata.scriptId,
-      targetSha256: metadata.targetSha256,
-      environmentSha256: metadata.environmentSha256,
-      envSha256: metadata.envSha256,
-      probeSha256: metadata.probeSha256,
-      runnerSha256: metadata.runnerSha256,
-    };
+    const entry = { ...event, seq: trace.length + 1, count: 1, caller, ...metadata };
     trace.push(entry);
     traceByKey.set(key, entry);
   };
@@ -203,10 +255,7 @@ function createContextTraceBridge(metadata) {
     },
     beginProbeInstall() {
       Object.defineProperty(globalThis, '__dsProbeEmit', {
-        value: emit,
-        configurable: true,
-        enumerable: false,
-        writable: false,
+        value: emit, configurable: true, enumerable: false, writable: false,
       });
     },
     finishProbeInstall() {
@@ -216,12 +265,7 @@ function createContextTraceBridge(metadata) {
       emit({ category: 'dynamic-code', operation: 'scriptParsed', path: url || hash, sha256: hash, bytes });
     },
     emitRuntimeError(category, code, message) {
-      emit({
-        category,
-        operation: 'throw',
-        path: 'runtime',
-        error: { code, message },
-      });
+      emit({ category, operation: 'throw', path: 'runtime', error: { code, message } });
     },
     serialize() {
       return JSON.stringify(trace);
@@ -232,56 +276,66 @@ function createContextTraceBridge(metadata) {
 async function run() {
   const mode = readMode(process.argv.slice(2));
   const manifest = JSON.parse(fs.readFileSync(path.join(taskDir, 'manifest.json'), 'utf8'));
-  const targetSource = fs.readFileSync(path.join(taskDir, 'target.js'));
-  const environmentSource = fs.readFileSync(path.join(taskDir, 'environment.json'));
+  if (manifest.schemaVersion !== 2) throw runtimeError('E_MANIFEST_SCHEMA', 'Unsupported rebuild manifest schema');
 
-  if (sha256(targetSource) !== manifest.targetSha256) {
-    throw runtimeError('E_TARGET_INTEGRITY', 'target.js does not match manifest targetSha256');
-  }
-  if (sha256(environmentSource) !== manifest.environmentSha256) {
-    throw runtimeError('E_ENVIRONMENT_INTEGRITY', 'environment.json does not match manifest environmentSha256');
-  }
+  const target = selectTarget(manifest);
+  const baselineSource = readVerified('evidence/baseline.json', manifest.baselineSha256, 'E_BASELINE_INTEGRITY');
+  const sessionStateSource = readVerified('evidence/session-state.json', manifest.sessionStateSha256, 'E_SESSION_STATE_INTEGRITY');
+  const propertyFactsSource = readVerified('evidence/property-facts.json', manifest.propertyFactsSha256, 'E_PROPERTY_FACTS_INTEGRITY');
+  const recipeSource = fs.readFileSync(path.join(taskDir, 'recipe.json'), 'utf8');
+  const baseline = JSON.parse(baselineSource);
+  const sessionState = JSON.parse(sessionStateSource);
+  JSON.parse(propertyFactsSource);
+  const recipe = JSON.parse(recipeSource);
+  const recipeSha256 = sha256(recipeSource);
+  const probeSha256 = mode === 'probe' ? sha256(probeInstallerSource) : null;
 
   const startedAt = new Date().toISOString();
   const runId = startedAt.replace(/[^0-9]/g, '').slice(0, 17) + '-' + randomUUID().slice(0, 8);
   const runDir = path.join(taskDir, 'runs', runId);
   fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
-  const envCode = fs.readFileSync(path.join(taskDir, 'env.js'), 'utf8');
-  const envSha256 = sha256(envCode);
-  const probeCode = mode === 'probe'
-    ? fs.readFileSync(path.join(taskDir, 'probe.js'), 'utf8')
-    : null;
-  const probeSha256 = probeCode === null ? null : sha256(probeCode);
 
   let output = null;
   let failure = null;
   let inspectorSession = null;
   let traceBridge = null;
+  let dom = null;
   const dynamicPending = [];
   let captureDynamic = false;
   try {
-    const sandbox = Object.create(null);
-    const context = vm.createContext(sandbox, { name: 'DeepSpiderRebuild' });
-    const bootstrapSource = '(' + createContextTraceBridge.toString() + ')(' + JSON.stringify({
+    const { JSDOM } = require(manifest.jsdomEntryPath);
+    dom = new JSDOM(sessionState.document?.html || '<!doctype html>', {
+      url: manifest.pageUrl,
+      runScripts: 'outside-only',
+      pretendToBeVisual: true,
+    });
+    const context = dom.getInternalVMContext();
+    const effective = compileEffectiveEnvironment(baseline, sessionState, recipe);
+    new vm.Script('(' + environmentInstallerSource + ')(' + JSON.stringify(effective) + ')', {
+      filename: 'environment-installer.js',
+    }).runInContext(context, { timeout: runtimeTimeoutMs });
+
+    const metadata = {
       sessionId: manifest.sessionId,
       scriptId: manifest.scriptId,
-      targetSha256: manifest.targetSha256,
-      environmentSha256: manifest.environmentSha256,
-      envSha256,
+      originalTargetSha256: manifest.originalTargetSha256,
+      selectedTargetSha256: target.sha256,
+      baselineSha256: manifest.baselineSha256,
+      sessionStateSha256: manifest.sessionStateSha256,
+      propertyFactsSha256: manifest.propertyFactsSha256,
+      recipeSha256,
       probeSha256,
       runnerSha256,
-    }) + ')';
+    };
+    const bootstrapSource = '(' + createContextTraceBridge.toString() + ')(' + JSON.stringify(metadata) + ')';
     traceBridge = new vm.Script(bootstrapSource, { filename: 'runtime-bootstrap.js' })
       .runInContext(context, { timeout: runtimeTimeoutMs });
-    if (mode === 'probe') {
-      traceBridge.installNodeGuards();
-    }
-    new vm.Script(envCode, { filename: 'env.js' }).runInContext(context, { timeout: runtimeTimeoutMs });
 
     if (mode === 'probe') {
+      traceBridge.installNodeGuards();
       traceBridge.beginProbeInstall();
       try {
-        new vm.Script('(' + probeCode + ')(globalThis.__dsProbeEmit)', { filename: 'probe.js' })
+        new vm.Script('(' + probeInstallerSource + ')(globalThis.__dsProbeEmit)', { filename: 'probe.js' })
           .runInContext(context, { timeout: runtimeTimeoutMs });
       } finally {
         traceBridge.finishProbeInstall();
@@ -292,12 +346,12 @@ async function run() {
       await post(inspectorSession, 'Debugger.enable');
       inspectorSession.on('Debugger.scriptParsed', (message) => {
         const { scriptId, url = '' } = message.params || {};
-        if (!captureDynamic || !scriptId || ['target.js', 'env.js', 'probe.js', 'entry.js'].includes(url)) return;
+        if (!captureDynamic || !scriptId || [target.filename, 'probe.js', 'entry.js'].includes(url)) return;
         const pending = post(inspectorSession, 'Debugger.getScriptSource', { scriptId })
           .then(({ scriptSource }) => {
             if (!scriptSource) return;
             const hash = sha256(scriptSource);
-            const dynamicDir = path.join(taskDir, 'dynamic');
+            const dynamicDir = path.join(taskDir, 'evidence', 'dynamic');
             fs.mkdirSync(dynamicDir, { recursive: true, mode: 0o700 });
             const dynamicFile = path.join(dynamicDir, hash + '.js');
             if (fs.existsSync(dynamicFile)) {
@@ -315,7 +369,7 @@ async function run() {
     }
 
     captureDynamic = true;
-    new vm.Script(targetSource.toString('utf8'), { filename: 'target.js' })
+    new vm.Script(target.source, { filename: target.filename })
       .runInContext(context, { timeout: runtimeTimeoutMs });
     const rawOutput = new vm.Script(manifest.callExpression || 'undefined', { filename: 'entry.js' })
       .runInContext(context, { timeout: runtimeTimeoutMs });
@@ -332,12 +386,11 @@ async function run() {
     const category = ['E_RUNTIME_TIMEOUT', 'ERR_SCRIPT_EXECUTION_TIMEOUT'].includes(error.code)
       ? 'runtime-timeout'
       : 'runtime-exception';
-    if (traceBridge) {
-      traceBridge.emitRuntimeError(category, error.code || 'E_RUNTIME', error.message);
-    }
+    if (traceBridge) traceBridge.emitRuntimeError(category, error.code || 'E_RUNTIME', error.message);
     throw error;
   } finally {
     if (inspectorSession) inspectorSession.disconnect();
+    if (dom) dom.window.close();
     const finishedAt = new Date().toISOString();
     writeJson(path.join(runDir, 'result.json'), {
       runId,
@@ -345,9 +398,13 @@ async function run() {
       status: failure ? 'error' : 'success',
       sessionId: manifest.sessionId,
       scriptId: manifest.scriptId,
-      targetSha256: manifest.targetSha256,
-      environmentSha256: manifest.environmentSha256,
-      envSha256,
+      originalTargetSha256: manifest.originalTargetSha256,
+      selectedTargetSha256: target.sha256,
+      derivedTarget: target.derived,
+      baselineSha256: manifest.baselineSha256,
+      sessionStateSha256: manifest.sessionStateSha256,
+      propertyFactsSha256: manifest.propertyFactsSha256,
+      recipeSha256,
       probeSha256,
       runnerSha256,
       output,

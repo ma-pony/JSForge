@@ -167,7 +167,7 @@ function assertRebuildArtifacts(isolation) {
     assert.match(artifact.manifest.scriptUrl, new RegExp(`session=${index === 0 ? 'A' : 'B'}$`))
     assert.equal(fs.existsSync(path.join(artifact.taskDir, 'manifest.json')), true)
     assert.match(
-      fs.readFileSync(path.join(artifact.taskDir, 'target.js'), 'utf8'),
+      fs.readFileSync(path.join(artifact.taskDir, 'target.original.js'), 'utf8'),
       new RegExp(`native-session-${index === 0 ? 'A' : 'B'}`),
     )
     assert.equal(

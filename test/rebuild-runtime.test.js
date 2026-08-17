@@ -4,9 +4,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { createRequire } from 'node:module'
 
 import { createManifest, sha256 } from '../src/rebuild/bundle.js'
+import { getChromeBaseline } from '../src/rebuild/environment/chrome-baseline.js'
+import { createRecipe } from '../src/rebuild/environment/recipe.js'
 import { buildProbeCode, buildRunnerCode } from '../src/rebuild/runtime-template.js'
+
+const require = createRequire(import.meta.url)
 
 function createBundle(options = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-runtime-'))
@@ -30,12 +35,17 @@ globalThis.inspectRuntime = function inspectRuntime() {
   };
 };
 `
-  const environmentSource = JSON.stringify({ navigator: { language: 'en-US' } })
-  const envCode = `globalThis.window = globalThis;
-globalThis.self = globalThis;
-globalThis.top = globalThis;
-globalThis.parent = globalThis;
-globalThis.navigator = { language: 'en-US' };`
+  const baselineSource = JSON.stringify(getChromeBaseline(), null, 2)
+  const sessionStateSource = JSON.stringify({
+    source: 'patchright-session',
+    mode: 'observe',
+    page: { url: 'https://example.com/', title: 'Fixture', referrer: '' },
+    storage: { cookies: [], local: {}, session: {} },
+    document: { html: '<!doctype html><title>Fixture</title>' },
+    values: { 'navigator.language': 'en-US' },
+  }, null, 2)
+  const propertyFactsSource = JSON.stringify([], null, 2)
+  const recipeSource = JSON.stringify(createRecipe(), null, 2)
   const manifest = createManifest({
     sessionId: 'session-1',
     site: 'example.com',
@@ -43,16 +53,24 @@ globalThis.navigator = { language: 'en-US' };`
     scriptId: 'script-1',
     scriptUrl: 'https://example.com/app.js',
     targetSource,
-    environmentSource,
+    baselineSource,
+    sessionStateSource,
+    propertyFactsSource,
+    recipeSource,
+    jsdomEntryPath: require.resolve('jsdom'),
     callExpression: options.callExpression ?? 'window.inspectRuntime()',
     createdAt: '2026-08-14T00:00:00.000Z',
   })
 
+  fs.mkdirSync(path.join(directory, 'evidence', 'dynamic'), { recursive: true })
+  fs.mkdirSync(path.join(directory, 'runs'))
   fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest, null, 2))
-  fs.writeFileSync(path.join(directory, 'target.js'), targetSource)
-  fs.writeFileSync(path.join(directory, 'environment.json'), environmentSource)
-  fs.writeFileSync(path.join(directory, 'env.js'), envCode)
-  fs.writeFileSync(path.join(directory, 'probe.js'), buildProbeCode())
+  fs.writeFileSync(path.join(directory, 'target.original.js'), targetSource)
+  fs.writeFileSync(path.join(directory, 'evidence', 'baseline.json'), baselineSource)
+  fs.writeFileSync(path.join(directory, 'evidence', 'session-state.json'), sessionStateSource)
+  fs.writeFileSync(path.join(directory, 'evidence', 'property-facts.json'), propertyFactsSource)
+  fs.writeFileSync(path.join(directory, 'recipe.json'), recipeSource)
+  fs.writeFileSync(path.join(directory, 'transforms.json'), '[]')
   fs.writeFileSync(path.join(directory, 'runner.mjs'), buildRunnerCode(options.runnerOptions))
   return directory
 }
@@ -108,6 +126,8 @@ const inspectConstructor = (label, constructor) => {
 inspectConstructor('global-constructor', globalThis.constructor && globalThis.constructor.constructor);
 const globalPrototype = Object.getPrototypeOf(globalThis);
 inspectConstructor('global-prototype', globalPrototype && globalPrototype.constructor && globalPrototype.constructor.constructor);
+inspectConstructor('document-constructor', document.constructor && document.constructor.constructor);
+inspectConstructor('navigator-constructor', navigator.constructor && navigator.constructor.constructor);
 const eventDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__dsEmit');
 inspectConstructor('event-bridge', eventDescriptor && eventDescriptor.value && eventDescriptor.value.constructor);
 const installerDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__dsProbeEmit');
@@ -127,9 +147,9 @@ globalThis.inspectHostIsolation = () => ({ nodeLeaks, builtinLeaks });
   }
 })
 
-test('runner rejects a target whose bytes no longer match the manifest', () => {
+test('runner rejects an original target whose bytes no longer match the manifest', () => {
   const directory = createBundle()
-  fs.appendFileSync(path.join(directory, 'target.js'), '\n// changed')
+  fs.appendFileSync(path.join(directory, 'target.original.js'), '\n// changed')
 
   const result = runBundle(directory, 'verify')
 
@@ -153,8 +173,9 @@ test('probe and verify runs create separate immutable result records', () => {
   assert.deepEqual(new Set(records.map((record) => record.mode)), new Set(['probe', 'verify']))
   for (const record of records) {
     assert.equal(record.status, 'success')
-    assert.equal(typeof record.targetSha256, 'string')
-    assert.equal(typeof record.envSha256, 'string')
+    assert.equal(typeof record.originalTargetSha256, 'string')
+    assert.equal(typeof record.selectedTargetSha256, 'string')
+    assert.equal(typeof record.recipeSha256, 'string')
     assert.equal(typeof record.startedAt, 'string')
     assert.equal(typeof record.finishedAt, 'string')
     assert.equal(record.error, null)
@@ -163,14 +184,18 @@ test('probe and verify runs create separate immutable result records', () => {
   const probeRecord = records.find((record) => record.mode === 'probe')
   const verifyRecord = records.find((record) => record.mode === 'verify')
   const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'))
-  const envCodeSha256 = sha256(fs.readFileSync(path.join(directory, 'env.js')))
-  const probeSha256 = sha256(fs.readFileSync(path.join(directory, 'probe.js')))
+  const probeSha256 = sha256(buildProbeCode())
   const runnerSha256 = sha256(fs.readFileSync(path.join(directory, 'runner.mjs')))
   for (const record of records) {
     assert.equal(record.sessionId, 'session-1')
     assert.equal(record.scriptId, 'script-1')
-    assert.equal(record.environmentSha256, manifest.environmentSha256)
-    assert.equal(record.envSha256, envCodeSha256)
+    assert.equal(record.originalTargetSha256, manifest.originalTargetSha256)
+    assert.equal(record.selectedTargetSha256, manifest.originalTargetSha256)
+    assert.equal(record.baselineSha256, manifest.baselineSha256)
+    assert.equal(record.sessionStateSha256, manifest.sessionStateSha256)
+    assert.equal(record.propertyFactsSha256, manifest.propertyFactsSha256)
+    assert.equal(record.recipeSha256, manifest.recipeSha256)
+    assert.equal(record.derivedTarget, false)
     assert.equal(record.runnerSha256, runnerSha256)
   }
   assert.equal(probeRecord.probeSha256, probeSha256)
@@ -182,9 +207,9 @@ test('probe and verify runs create separate immutable result records', () => {
   assert.match(trace, /"category":"timing-random"/)
   assert.match(trace, /"category":"dynamic-code"/)
 
-  const dynamicFiles = fs.readdirSync(path.join(directory, 'dynamic'))
+  const dynamicFiles = fs.readdirSync(path.join(directory, 'evidence', 'dynamic'))
   assert.equal(dynamicFiles.length, 1)
-  const dynamicSource = fs.readFileSync(path.join(directory, 'dynamic', dynamicFiles[0]), 'utf8')
+  const dynamicSource = fs.readFileSync(path.join(directory, 'evidence', 'dynamic', dynamicFiles[0]), 'utf8')
   assert.equal(dynamicSource, 'globalThis.dynamicValue = 7;\n//# sourceURL=dynamic-fixture.js')
 })
 
@@ -229,7 +254,7 @@ test('runner rejects a modified dynamic source file on the next capture', () => 
   const directory = createBundle()
   const first = runBundle(directory, 'probe')
   assert.equal(first.status, 0, first.stderr)
-  const dynamicFile = path.join(directory, 'dynamic', fs.readdirSync(path.join(directory, 'dynamic'))[0])
+  const dynamicFile = path.join(directory, 'evidence', 'dynamic', fs.readdirSync(path.join(directory, 'evidence', 'dynamic'))[0])
   fs.writeFileSync(dynamicFile, 'MODIFIED')
 
   const second = runBundle(directory, 'probe')
@@ -237,6 +262,62 @@ test('runner rejects a modified dynamic source file on the next capture', () => 
   assert.equal(second.status, 1)
   assert.match(second.stderr, /E_DYNAMIC_INTEGRITY/)
   assert.equal(fs.readFileSync(dynamicFile, 'utf8'), 'MODIFIED')
+})
+
+test('runner rejects an unrecorded derived target', () => {
+  const directory = createBundle()
+  fs.writeFileSync(path.join(directory, 'target.working.js'), 'globalThis.answer = 7;')
+
+  const result = runBundle(directory, 'verify')
+
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /E_WORKING_TARGET_INTEGRITY/)
+})
+
+test('runner executes a derived target only when transforms form a complete hash chain', () => {
+  const directory = createBundle({
+    targetSource: 'globalThis.answer = 1;\n',
+    callExpression: 'window.answer',
+  })
+  const original = fs.readFileSync(path.join(directory, 'target.original.js'), 'utf8')
+  const working = 'globalThis.answer = 7;\n'
+  fs.writeFileSync(path.join(directory, 'target.working.js'), working)
+  fs.writeFileSync(path.join(directory, 'transforms.json'), JSON.stringify([{
+    reason: 'replace fixture return value',
+    beforeSha256: sha256(original),
+    afterSha256: sha256(working),
+  }], null, 2))
+
+  const result = runBundle(directory, 'verify')
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout), 7)
+  const runId = fs.readdirSync(path.join(directory, 'runs'))[0]
+  const record = JSON.parse(fs.readFileSync(path.join(directory, 'runs', runId, 'result.json'), 'utf8'))
+  assert.equal(record.originalTargetSha256, sha256(original))
+  assert.equal(record.selectedTargetSha256, sha256(working))
+  assert.equal(record.derivedTarget, true)
+})
+
+test('runner applies the current editable Recipe and records its actual hash', () => {
+  const directory = createBundle({
+    targetSource: 'globalThis.width = screen.width;\n',
+    callExpression: 'window.width',
+  })
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'))
+  const recipe = JSON.parse(fs.readFileSync(path.join(directory, 'recipe.json'), 'utf8'))
+  recipe.fixedValues['screen.width'] = 1365
+  const recipeSource = JSON.stringify(recipe, null, 2)
+  fs.writeFileSync(path.join(directory, 'recipe.json'), recipeSource)
+
+  const result = runBundle(directory, 'verify')
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout), 1365)
+  const runId = fs.readdirSync(path.join(directory, 'runs'))[0]
+  const record = JSON.parse(fs.readFileSync(path.join(directory, 'runs', runId, 'result.json'), 'utf8'))
+  assert.equal(record.recipeSha256, sha256(recipeSource))
+  assert.notEqual(record.recipeSha256, manifest.recipeSha256)
 })
 
 test('probe trace aggregates repeated events by category operation path and caller', () => {
@@ -263,7 +344,7 @@ globalThis.loopResult = true;
 
   assert.equal(languageEvents.length, 1)
   assert.equal(languageEvents[0].count, 100)
-  assert.match(languageEvents[0].caller, /target\.js/)
+  assert.match(languageEvents[0].caller, /target\.original\.js/)
 })
 
 test('probe classifies a missing browser property from a real target access', () => {

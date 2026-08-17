@@ -137,6 +137,29 @@ function installer(effective) {
     return implementation
   }
 
+  for (const [name, value] of [['atob', root.atob], ['btoa', root.btoa]]) {
+    if (typeof value === 'function') {
+      nativeSource.set(value, `function ${name}() { [native code] }`)
+    }
+  }
+
+  const browserError = root.Error
+  Object.defineProperty(browserError, 'prepareStackTrace', {
+    value(error, frames) {
+      const visibleFrames = frames.filter((frame) => {
+        let file = ''
+        try { file = String(frame.getFileName() || frame.getScriptNameOrSourceURL() || '') } catch {
+          // Unreadable stack frames are omitted by the browser-style formatter.
+        }
+        return !/node:|internal\/|runner\.mjs/.test(file)
+      })
+      return `${browserError.prototype.toString.call(error)}${visibleFrames.map((frame) => `\n    at ${String(frame)}`).join('')}`
+    },
+    configurable: true,
+    writable: true,
+  })
+  nativeSource.set(browserError.prepareStackTrace, 'function prepareStackTrace() { [native code] }')
+
   if (typeof root.Worker !== 'function') {
     defineValue('Worker', nativeFunction('Worker', function Worker() {
       throw new TypeError('Illegal constructor')
@@ -156,6 +179,10 @@ function installer(effective) {
       writable: true,
     })
   }
+}
+
+export function getEnvironmentInstallerFunctionSource() {
+  return installer.toString()
 }
 
 export function compileEnvironment({ baseline, sessionState = {}, recipe, replay = {} }) {

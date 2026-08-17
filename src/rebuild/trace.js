@@ -2,11 +2,11 @@ const CATEGORY_RULES = [
   ['target-integrity', 'restore the exact captured target before running'],
   ['node-fingerprint', 'remove Node-only identity from the runtime realm'],
   ['source-integrity', 'reduce observable probe or environment differences'],
-  ['brand-mismatch', 'collect browser prototype and descriptor facts, then patch env.js'],
-  ['environment-missing', 'collect the missing browser property, then patch env.js'],
-  ['timing-random', 'compare browser timing or randomness inputs before patching env.js'],
+  ['brand-mismatch', 'collect browser prototype and descriptor facts, then update recipe.json'],
+  ['environment-missing', 'collect the missing browser property, then update recipe.json'],
+  ['timing-random', 'compare browser timing or randomness inputs before updating recipe.json'],
   ['dynamic-code', 'inspect the immutable dynamic source captured by hash'],
-  ['runtime-exception', 'trace the preceding environment access without changing target.js'],
+  ['runtime-exception', 'trace the preceding environment access before changing the Recipe or a recorded working copy'],
   ['runtime-timeout', 'inspect the last environment access before the timeout'],
 ]
 
@@ -26,14 +26,16 @@ export function analyzeTrace(entries) {
         category,
         path: event.path || null,
         nextAction,
-        targetModificationAllowed: false,
+        originalImmutable: true,
+        derivedTargetAllowed: true,
       }
     }
   }
   return {
     category: 'no-divergence',
     path: null,
-    nextAction: 'run verify mode with the unchanged target',
-    targetModificationAllowed: false,
+    nextAction: 'run verify mode with the original or a recorded working copy',
+    originalImmutable: true,
+    derivedTargetAllowed: true,
   }
 }

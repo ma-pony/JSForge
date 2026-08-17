@@ -10,7 +10,7 @@ test('parses newline-delimited trace events and ignores blank lines', () => {
   assert.equal(events[1].path, 'process')
 })
 
-test('selects the highest-priority runtime divergence and forbids target modification', () => {
+test('selects the highest-priority runtime divergence and preserves the original target', () => {
   const result = analyzeTrace([
     { category: 'runtime-timeout', path: 'target.js' },
     { category: 'environment-missing', path: 'navigator.plugins' },
@@ -21,7 +21,8 @@ test('selects the highest-priority runtime divergence and forbids target modific
     category: 'node-fingerprint',
     path: 'process',
     nextAction: 'remove Node-only identity from the runtime realm',
-    targetModificationAllowed: false,
+    originalImmutable: true,
+    derivedTargetAllowed: true,
   })
 })
 
@@ -61,6 +62,7 @@ test('reports a stable next action for each supported category', () => {
     const result = analyzeTrace([{ category, path: 'fixture' }])
     assert.equal(result.category, category)
     assert.equal(typeof result.nextAction, 'string')
-    assert.equal(result.targetModificationAllowed, false)
+    assert.equal(result.originalImmutable, true)
+    assert.equal(result.derivedTargetAllowed, true)
   }
 })

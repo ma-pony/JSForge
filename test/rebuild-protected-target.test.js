@@ -4,13 +4,16 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 import { createManifest, sha256 } from '../src/rebuild/bundle.js'
-import { buildEnvCode } from '../src/env/modules/index.js'
-import { buildProbeCode, buildRunnerCode } from '../src/rebuild/runtime-template.js'
+import { getChromeBaseline } from '../src/rebuild/environment/chrome-baseline.js'
+import { createRecipe } from '../src/rebuild/environment/recipe.js'
+import { buildRunnerCode } from '../src/rebuild/runtime-template.js'
 
 const fixtureDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'rebuild')
+const require = createRequire(import.meta.url)
 
 function pageData() {
   return {
@@ -42,7 +45,20 @@ function pageData() {
 function createBundle() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-protected-'))
   const targetSource = fs.readFileSync(path.join(fixtureDirectory, 'protected-target.js'), 'utf8')
-  const environmentSource = JSON.stringify(pageData())
+  const baselineSource = JSON.stringify(getChromeBaseline(), null, 2)
+  const sessionStateSource = JSON.stringify({
+    source: 'patchright-session',
+    mode: 'observe',
+    page: { url: 'https://example.com/path', title: 'Fixture', referrer: '' },
+    storage: { cookies: [], local: {}, session: {} },
+    document: { html: '<!doctype html><title>Fixture</title>' },
+    values: {
+      'navigator.language': pageData().navigator.language,
+      'navigator.userAgent': pageData().navigator.userAgent,
+    },
+  }, null, 2)
+  const propertyFactsSource = '[]'
+  const recipeSource = JSON.stringify(createRecipe(), null, 2)
   const manifest = createManifest({
     sessionId: 'session-protected',
     site: 'example.com',
@@ -50,19 +66,24 @@ function createBundle() {
     scriptId: 'script-protected',
     scriptUrl: 'https://example.com/protected.js',
     targetSource,
-    environmentSource,
+    baselineSource,
+    sessionStateSource,
+    propertyFactsSource,
+    recipeSource,
+    jsdomEntryPath: require.resolve('jsdom'),
     callExpression: 'window.protectedResult',
     createdAt: '2026-08-14T00:00:00.000Z',
   })
 
-  fs.mkdirSync(path.join(directory, 'patches'))
-  fs.mkdirSync(path.join(directory, 'dynamic'))
+  fs.mkdirSync(path.join(directory, 'evidence', 'dynamic'), { recursive: true })
   fs.mkdirSync(path.join(directory, 'runs'))
   fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest, null, 2))
-  fs.writeFileSync(path.join(directory, 'target.js'), targetSource)
-  fs.writeFileSync(path.join(directory, 'environment.json'), environmentSource)
-  fs.writeFileSync(path.join(directory, 'env.js'), buildEnvCode(pageData()))
-  fs.writeFileSync(path.join(directory, 'probe.js'), buildProbeCode())
+  fs.writeFileSync(path.join(directory, 'target.original.js'), targetSource)
+  fs.writeFileSync(path.join(directory, 'evidence', 'baseline.json'), baselineSource)
+  fs.writeFileSync(path.join(directory, 'evidence', 'session-state.json'), sessionStateSource)
+  fs.writeFileSync(path.join(directory, 'evidence', 'property-facts.json'), propertyFactsSource)
+  fs.writeFileSync(path.join(directory, 'recipe.json'), recipeSource)
+  fs.writeFileSync(path.join(directory, 'transforms.json'), '[]')
   fs.writeFileSync(path.join(directory, 'runner.mjs'), buildRunnerCode())
   return { directory, targetSha256: sha256(targetSource) }
 }
@@ -83,7 +104,7 @@ test('generic protected target stays immutable across probe and verify runs', ()
   assert.equal(probe.status, 0, probe.stderr)
   assert.deepEqual(JSON.parse(verify.stdout), { ok: true, failures: [], value: 17 })
   assert.deepEqual(JSON.parse(probe.stdout), { ok: true, failures: [], value: 17 })
-  assert.equal(sha256(fs.readFileSync(path.join(directory, 'target.js'))), targetSha256)
+  assert.equal(sha256(fs.readFileSync(path.join(directory, 'target.original.js'))), targetSha256)
 
   const runDirectories = fs.readdirSync(path.join(directory, 'runs'))
   const records = runDirectories.map((runId) => ({
@@ -96,8 +117,8 @@ test('generic protected target stays immutable across probe and verify runs', ()
   assert.match(trace, /"category":"source-integrity"/)
   assert.match(trace, /"category":"dynamic-code"/)
 
-  const dynamicSources = fs.readdirSync(path.join(directory, 'dynamic')).map((file) =>
-    fs.readFileSync(path.join(directory, 'dynamic', file), 'utf8'),
+  const dynamicSources = fs.readdirSync(path.join(directory, 'evidence', 'dynamic')).map((file) =>
+    fs.readFileSync(path.join(directory, 'evidence', 'dynamic', file), 'utf8'),
   )
   assert.ok(dynamicSources.includes('globalThis.__dynamicProtectedValue = 17;'))
 })
