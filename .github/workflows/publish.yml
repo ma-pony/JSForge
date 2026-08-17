@@ -26,6 +26,7 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm test
       - run: pnpm lint
+      - run: pnpm exec patchright install chromium
       - run: pnpm test:integration
       - run: pnpm smoke:pack
 

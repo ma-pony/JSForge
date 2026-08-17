@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 
 const root = JSON.parse(
   fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')
@@ -9,6 +10,12 @@ const pnpmWorkspace = fs.readFileSync(
   new URL('../pnpm-workspace.yaml', import.meta.url),
   'utf8'
 )
+const dshPackageJsonPath = createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')
+const yaml = createRequire(dshPackageJsonPath)('js-yaml')
+
+function loadWorkflow(file) {
+  return yaml.load(fs.readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8'))
+}
 
 test('manifest has the exact direct runtime dependency surface', () => {
   assert.deepEqual(Object.keys(root.dependencies).sort(), [
@@ -54,39 +61,46 @@ test('published package includes the bilingual project readme', () => {
   assert.equal(root.files.includes('plugins/'), false)
 })
 
-test('publish jobs use the Node floor and frozen script-free installs', () => {
-  const workflow = fs.readFileSync(
-    new URL('../.github/workflows/publish.yml', import.meta.url),
-    'utf8'
+test('publish job provisions Patchright after the frozen release gates and before integration', () => {
+  const workflow = loadWorkflow('publish.yml')
+  const testRuns = workflow.jobs.test.steps
+    .map((step) => step.run)
+    .filter(Boolean)
+
+  assert.deepEqual(
+    testRuns,
+    [
+      'pnpm install --frozen-lockfile --ignore-scripts',
+      'pnpm test',
+      'pnpm lint',
+      'pnpm exec patchright install chromium',
+      'pnpm test:integration',
+      'pnpm smoke:pack',
+    ]
   )
-  assert.equal((workflow.match(/node-version: '24'/g) || []).length, 2)
-  assert.equal((workflow.match(/version: 11\.21\.0/g) || []).length, 2)
-  assert.equal(
-    (workflow.match(/pnpm install --frozen-lockfile --ignore-scripts/g) || []).length,
-    2
-  )
-  assert.match(workflow, /- run: pnpm test:integration/)
+  assert.equal(workflow.jobs.publish.needs, 'test')
+  assert.equal(workflow.jobs.test.steps[1].with.version, '11.21.0')
+  assert.equal(workflow.jobs.publish.steps[1].with.version, '11.21.0')
+  assert.equal(workflow.jobs.test.steps[2].with['node-version'], '24')
+  assert.equal(workflow.jobs.publish.steps[2].with['node-version'], '24')
 })
 
 test('DSH refresh workflow reports dependency drift through the full release gate', () => {
-  const workflow = fs.readFileSync(
-    new URL('../.github/workflows/dsh-refresh.yml', import.meta.url),
-    'utf8'
-  )
+  const workflow = loadWorkflow('dsh-refresh.yml')
+  const runs = workflow.jobs.refresh.steps.map((step) => step.run).filter(Boolean)
 
-  assert.match(workflow, /schedule:/)
-  assert.match(workflow, /workflow_dispatch:/)
-  assert.match(workflow, /node-version: '24'/)
-  assert.match(workflow, /version: 11\.21\.0/)
-  assert.match(
-    workflow,
-    /pnpm update @deepseek-ai\/dsh@latest @deepseek-ai\/cordis@latest @deepseek-ai\/dsh-tools@next/
-  )
-  ;['pnpm test', 'pnpm lint', 'pnpm test:integration', 'pnpm smoke:pack'].forEach((command) => {
-    assert.match(workflow, new RegExp(`- run: ${command.replace(':', '\\:')}`))
-  })
-  assert.match(workflow, /git diff -- pnpm-lock\.yaml/)
-  assert.doesNotMatch(workflow, /\b(?:git commit|git push|gh pr|npm publish)\b/i)
+  assert.ok(workflow.on.schedule)
+  assert.deepEqual(workflow.on.workflow_dispatch, null)
+  assert.equal(workflow.jobs.refresh.steps[1].with.version, '11.21.0')
+  assert.equal(workflow.jobs.refresh.steps[2].with['node-version'], '24')
+  assert.deepEqual(runs, [
+    'pnpm update @deepseek-ai/dsh@latest @deepseek-ai/cordis@latest @deepseek-ai/dsh-tools@next',
+    'pnpm test',
+    'pnpm lint',
+    'pnpm test:integration',
+    'pnpm smoke:pack',
+    'git diff -- pnpm-lock.yaml',
+  ])
 })
 
 test('unit script uses the platform-independent top-level test runner', () => {

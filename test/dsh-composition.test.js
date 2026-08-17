@@ -36,17 +36,50 @@ const readmes = ['README.md', 'README_EN.md'].map((file) => ({
   content: fs.readFileSync(path.join(projectRoot, file), 'utf8'),
 }))
 
-test('both READMEs document the native DSH workflow and current command surface', () => {
+function readmeSection(content, heading) {
+  const start = content.indexOf(heading)
+  const end = content.indexOf('\n## ', start + heading.length)
+  return content.slice(start, end === -1 ? content.length : end)
+}
+
+function documentedCommands(content, heading) {
+  return readmeSection(content, heading)
+    .split('\n')
+    .map((line) => line.match(/^\| `deepspider (.+)` \|/))
+    .filter(Boolean)
+    .map((match) => match[1])
+}
+
+test('both READMEs expose the exact same current CLI command table', () => {
+  const expected = [
+    'agent [--port <number>] [--verbose]',
+    'mcp',
+    'fetch <url>',
+    'update',
+    '--version',
+    '--help',
+  ]
+  const chinese = documentedCommands(readmes[0].content, '## 使用方式')
+  const english = documentedCommands(readmes[1].content, '## Usage')
+
+  assert.deepEqual(chinese, expected)
+  assert.deepEqual(english, expected)
+  assert.deepEqual(chinese, english)
+})
+
+test('README capability and command sections do not advertise retired DSH capabilities', () => {
   for (const { file, content } of readmes) {
-    assert.match(content, /agent \[--port <number>\] \[--verbose\]/, file)
-    ;['deepspider mcp', 'deepspider fetch', 'deepspider update', 'deepspider --version', 'deepspider --help'].forEach((command) => {
-      assert.match(content, new RegExp(command), `${file} must document ${command}`)
-    })
-    ;['DSH Web', 'Session', 'Goal', 'Code Mode', 'Cordis', 'Patchright Chromium', '>=24.0.0', '11.21.0'].forEach((term) => {
-      assert.match(content, new RegExp(term), `${file} must document ${term}`)
-    })
-    assert.match(content, /~\/\.deepspider\/sessions\//, `${file} must document session artifacts`)
-    assert.doesNotMatch(content, /OpenCode|opencode|\bTUI\b|deepspider config/i, `${file} must not contain retired instructions`)
+    const headings = file === 'README.md'
+      ? ['## 核心特性', '## 使用方式']
+      : ['## Core features', '## Usage']
+    const documentedSurface = headings.map((heading) => readmeSection(content, heading)).join('\n')
+
+    assert.doesNotMatch(
+      documentedSurface,
+      /\b(?:Plan Mode|Subagents|Workflows|Ralph|web_fetch|evolve_skill|evolve)\b/i,
+      `${file} must not advertise a retired capability`
+    )
+    assert.doesNotMatch(documentedSurface, /OpenCode|opencode|\bTUI\b|deepspider config/i)
   }
 })
 
