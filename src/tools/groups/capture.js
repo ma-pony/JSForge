@@ -1,4 +1,5 @@
 import { EnvCollector, collectPropertyInRealm } from '../../browser/collector.js'
+import { SessionEvidenceCollector } from '../../browser/SessionEvidenceCollector.js'
 import { defineDeepSpiderTool } from '../catalog.js'
 import { DeepSpiderToolError } from '../errors.js'
 
@@ -19,6 +20,17 @@ function missingValueHint(data, path, collector) {
   }).catch(() => null)
 }
 
+function recordPropertyFact(runtime, result) {
+  if (!result?.success || !runtime.captures) return result
+  if (!Array.isArray(runtime.captures.propertyFacts)) runtime.captures.propertyFacts = []
+  runtime.captures.propertyFacts.push({
+    source: 'patchright-session',
+    mode: runtime.browserClient?.mode || 'observe',
+    ...result,
+  })
+  return result
+}
+
 export const tools = Object.freeze([
   defineDeepSpiderTool({
     name: 'collect_env',
@@ -27,7 +39,7 @@ export const tools = Object.freeze([
     async execute(runtime, _args, signal) {
       try {
         const page = await runtime.getPage({ signal })
-        return await new EnvCollector(page).collectFullSnapshot()
+        return await new SessionEvidenceCollector(page).collect()
       } catch (error) {
         failure(error)
       }
@@ -46,14 +58,15 @@ export const tools = Object.freeze([
         if (frameContext.contextId != null) {
           const args = JSON.stringify({ path, depth })
           const expression = `(() => ({ ...(${collectPropertyInRealm.toString()})(${args}), frameId: ${JSON.stringify(frameContext.frameId)} }))()`
-          return await runtime.cdpEvaluate(expression, { signal })
+          const result = await runtime.cdpEvaluate(expression, { signal })
+          return recordPropertyFact(runtime, result)
         }
 
         const page = await runtime.getPage({ signal })
         const collector = new EnvCollector(page)
         const data = await collector.collect(path, { depth })
         const hint = await missingValueHint(data, path, collector)
-        return hint ? { ...data, hint } : data
+        return recordPropertyFact(runtime, hint ? { ...data, hint } : data)
       } catch (error) {
         failure(error)
       }

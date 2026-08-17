@@ -11,12 +11,13 @@ import { ScriptInterceptor } from './interceptors/ScriptInterceptor.js';
 import { AntiDebugInterceptor } from './interceptors/AntiDebugInterceptor.js';
 
 export class BrowserClient extends EventEmitter {
-  constructor({ dataStore } = {}) {
+  constructor({ dataStore, browserType = chromium } = {}) {
     super();
     if (!dataStore) {
       throw new TypeError('dataStore must be provided');
     }
     this.dataStore = dataStore;
+    this.browserType = browserType;
     this.browser = null;
     this.context = null;
     this.page = null;
@@ -26,6 +27,8 @@ export class BrowserClient extends EventEmitter {
     this.scriptInterceptor = null;
     this.antiDebugInterceptor = null;
     this.hookScript = null;
+    this.mode = null;
+    this.probeActivated = false;
     this.onMessage = null;
     this._isCleaningUp = false;
     // CDP session 健康检查节流
@@ -37,6 +40,15 @@ export class BrowserClient extends EventEmitter {
    * 启动浏览器
    */
   async launch(options = {}) {
+    try {
+      return await this._launch(options);
+    } catch (error) {
+      await this.cleanup();
+      throw error;
+    }
+  }
+
+  async _launch(options = {}) {
     // 启动新会话
     this.dataStore.startSession();
 
@@ -45,10 +57,10 @@ export class BrowserClient extends EventEmitter {
       executablePath = null,
       args = [],
       userDataDir = null,
-      hookMode = 'full',       // 'full' | 'minimal' | 'none'
+      mode = 'observe',
       disableInterceptors = false, // 禁用 CDP 拦截器
     } = options;
-    this._hookMode = hookMode;
+    this.mode = mode;
     this._disableInterceptors = disableInterceptors;
 
     const launchOptions = {
@@ -70,12 +82,12 @@ export class BrowserClient extends EventEmitter {
     if (userDataDir) {
       // 持久化模式：launchPersistentContext 返回 BrowserContext
       launchOptions.ignoreHTTPSErrors = true;
-      this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+      this.context = await this.browserType.launchPersistentContext(userDataDir, launchOptions);
       this.browser = this.context.browser();
       this.emit('launched', { headless, persistent: true });
     } else {
       // 临时模式（原有逻辑）
-      this.browser = await chromium.launch(launchOptions);
+      this.browser = await this.browserType.launch(launchOptions);
       this.emit('launched', { headless });
       this.context = await this.browser.newContext({
         ignoreHTTPSErrors: true,
@@ -83,10 +95,10 @@ export class BrowserClient extends EventEmitter {
     }
 
     // 保存 hook 脚本
-    this.hookScript = getDefaultHookScript(hookMode);
+    this.hookScript = getDefaultHookScript(mode);
 
     // 使用 addInitScript 在 context 级别注入
-    if (hookMode !== 'none' || this.hookScript) {
+    if (this.hookScript) {
       await this.context.addInitScript(this.hookScript);
     }
 
@@ -130,80 +142,65 @@ export class BrowserClient extends EventEmitter {
    * 设置页面（CDP 拦截器 + 消息绑定）
    */
   async setupPage(page) {
-    try {
-      // 如果这是当前页面的重新设置，先清理旧的 session
-      if (page === this.page && this.cdpSession && this._cdpSessionPage === page) {
-        await this.cdpSession.detach().catch(() => {});
-        this.cdpSession = null;
-        this._cdpSessionPage = null;
-      }
-
-      const cdp = await page.context().newCDPSession(page);
-
-      // 1. 启用 Runtime 域
-      await cdp.send('Runtime.enable');
-
-      // 2. 添加 CDP binding（前端调用此函数，后端接收）
-      await cdp.send('Runtime.addBinding', { name: '__deepspider_send__' });
-
-      // 3. 监听 binding 调用
-      cdp.on('Runtime.bindingCalled', (event) => {
-        if (event.name === '__deepspider_send__') {
-          try {
-            const data = JSON.parse(event.payload);
-            console.error('[BrowserClient] 收到消息:', data.type);
-            if (this.onMessage) {
-              this.onMessage(data, page);
-            }
-          } catch (e) {
-            console.error('[BrowserClient] 解析消息失败:', e.message);
-          }
-        }
-      });
-
-      // 4. 启动拦截器
-      let networkInterceptor = null;
-      let scriptInterceptor = null;
-      let antiDebugInterceptor = null;
-
-      if (!this._disableInterceptors) {
-        networkInterceptor = new NetworkInterceptor(cdp, page, this.dataStore);
-        scriptInterceptor = new ScriptInterceptor(cdp, page, this.dataStore);
-        await networkInterceptor.start();
-        await scriptInterceptor.start();
-
-        // 反无限 debugger：必须在 ScriptInterceptor 之后（Debugger 域已启用）
-        antiDebugInterceptor = new AntiDebugInterceptor(cdp);
-        await antiDebugInterceptor.start();
-
-        // ScriptInterceptor 拉取源码后通知 AntiDebugInterceptor，避免重复 CDP 调用
-        scriptInterceptor.onSource = (scriptId, source) => {
-          antiDebugInterceptor.checkScript(scriptId, source);
-        };
-      } else {
-        console.error('[BrowserClient] CDP 拦截器已禁用');
-      }
-
-      // 保存引用（仅对当前活动页面）
-      if (page === this.page) {
-        this.cdpSession = cdp;
-        this._cdpSessionPage = page;
-        this.networkInterceptor = networkInterceptor;
-        this.scriptInterceptor = scriptInterceptor;
-        this.antiDebugInterceptor = antiDebugInterceptor;
-      }
-
-      // 监听页面导航
-      page.on('framenavigated', (frame) => {
-        if (frame === page.mainFrame()) {
-          console.error('[BrowserClient] 页面导航到:', frame.url());
-        }
-      });
-
-      console.error('[BrowserClient] 页面已设置:', page.url() || '(空白页)');
-    } catch (e) {
-      console.error('[BrowserClient] 设置页面失败:', e.message);
+    // 如果这是当前页面的重新设置，先清理旧的 session
+    if (page === this.page && this.cdpSession && this._cdpSessionPage === page) {
+      await this.cdpSession.detach().catch(() => {});
+      this.cdpSession = null;
+      this._cdpSessionPage = null;
     }
+
+    const cdp = await page.context().newCDPSession(page);
+
+    // Runtime is required by the script interceptor, but observe mode adds no binding.
+    await cdp.send('Runtime.enable');
+
+    let networkInterceptor = null;
+    let scriptInterceptor = null;
+    let antiDebugInterceptor = null;
+
+    if (!this._disableInterceptors) {
+      networkInterceptor = new NetworkInterceptor(cdp, page, this.dataStore);
+      scriptInterceptor = new ScriptInterceptor(cdp, page, this.dataStore);
+      await networkInterceptor.start();
+      await scriptInterceptor.start();
+
+      antiDebugInterceptor = new AntiDebugInterceptor(cdp);
+      await antiDebugInterceptor.start();
+
+      scriptInterceptor.onSource = (scriptId, source) => {
+        antiDebugInterceptor.checkScript(scriptId, source);
+      };
+    } else {
+      console.error('[BrowserClient] CDP 拦截器已禁用');
+    }
+
+    if (page === this.page) {
+      this.cdpSession = cdp;
+      this._cdpSessionPage = page;
+      this.networkInterceptor = networkInterceptor;
+      this.scriptInterceptor = scriptInterceptor;
+      this.antiDebugInterceptor = antiDebugInterceptor;
+    }
+
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) {
+        console.error('[BrowserClient] 页面导航到:', frame.url());
+      }
+    });
+
+    console.error('[BrowserClient] 页面已设置:', page.url() || '(空白页)');
+  }
+
+  async activateProbe() {
+    if (this.probeActivated) return;
+    if (!this.context || !this.page) throw new Error('Browser is not launched');
+
+    const source = getDefaultHookScript('probe');
+    await this.context.addInitScript(source);
+    await this.page.evaluate(source);
+    this.hookScript = source;
+    this.probeActivated = true;
+    this.mode = 'probe';
   }
 
   /**

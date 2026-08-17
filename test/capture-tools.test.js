@@ -43,3 +43,52 @@ test('iframe property collection returns the same browser fact schema as the mai
   assert.deepEqual(JSON.parse(JSON.stringify(result.prototypeChain.slice(0, 2))), ['String', 'Object'])
   assert.equal(result.functionSource, null)
 })
+
+test('collect_env returns page evidence with explicit source and mode', async () => {
+  const result = await definition('collect_env').execute({
+    getPage: async () => ({
+      url: () => 'https://example.com/',
+      title: async () => 'Example',
+      content: async () => '<!doctype html>',
+      context: () => ({ cookies: async () => [] }),
+      evaluate: async () => ({ referrer: '', local: {}, session: {} }),
+    }),
+  }, {}, undefined)
+
+  assert.equal(result.source, 'patchright-session')
+  assert.equal(result.mode, 'observe')
+  assert.equal('navigator' in result, false)
+})
+
+test('collect_property stores successful browser facts in the owning Runtime', async () => {
+  const runtime = {
+    captures: { propertyFacts: [] },
+    browserClient: { mode: 'observe' },
+    getActiveFrameContext: () => ({ contextId: null, frameId: null }),
+    getPage: async () => ({
+      evaluate: async () => ({
+        success: true,
+        path: 'navigator.language',
+        data: { type: 'string', value: 'en-US' },
+        descriptor: null,
+        ownerDepth: 1,
+        brand: '[object String]',
+        constructorName: 'String',
+        prototypeChain: ['String', 'Object'],
+        functionSource: null,
+      }),
+    }),
+  }
+
+  const result = await definition('collect_property').execute(runtime, {
+    path: 'navigator.language',
+    depth: 2,
+  }, undefined)
+
+  assert.equal(result.success, true)
+  assert.deepEqual(runtime.captures.propertyFacts, [{
+    source: 'patchright-session',
+    mode: 'observe',
+    ...result,
+  }])
+})

@@ -96,6 +96,7 @@ export class DeepSpiderRuntime {
       webSocketSession: null,
       webSocketInitializationPromise: null,
       webSocketInitializationSession: null,
+      propertyFacts: [],
     }
     this.selectedTarget = null
     this.rebuildContext = null
@@ -273,7 +274,7 @@ export class DeepSpiderRuntime {
       await client.launch({
         headless: this.env.DEEPSPIDER_HEADLESS === 'true',
         userDataDir: this.paths.browserData,
-        hookMode: 'full',
+        mode: 'observe',
       })
       throwIfAborted(this._lifetime.signal)
       this.browserClient = client
