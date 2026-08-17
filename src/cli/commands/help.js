@@ -6,13 +6,13 @@ import { getVersion } from './version.js';
 
 export function run() {
   console.log(`
-deepspider v${getVersion()} - 智能爬虫工程平台
+deepspider v${getVersion()} - DSH-native JavaScript reverse-engineering platform
 
 用法:
   deepspider agent                   启动原生 DSH Web
   deepspider agent --port <number>   设置 DSH Web 端口
   deepspider agent --verbose         显示 DeepSpider 启动信息
-  deepspider mcp                     启动 MCP Server（供 Claude Code 连接）
+  deepspider mcp                     启动 stdio MCP 外部适配器
   deepspider fetch <url>             快速 HTTP 请求（轻量级）
   deepspider update                  检查更新
 

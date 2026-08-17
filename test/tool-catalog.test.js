@@ -347,7 +347,7 @@ test('MCP registers the central catalog through its sole registration path', () 
   const serverPath = fileURLToPath(new URL('../src/mcp/server.js', import.meta.url))
   const source = readFileSync(serverPath, 'utf8')
 
-  assert.match(source, /import\s+\{\s*deepSpiderCatalog\s*\}\s+from\s+'\.\.\/tools\/index\.js'/)
+  assert.match(source, /import\s+\{[^}]*\bdeepSpiderCatalog\b[^}]*\}\s+from\s+'\.\.\/tools\/index\.js'/)
   assert.equal((source.match(/registerMcpCatalog\(/g) || []).length, 1)
   assert.match(source, /registerMcpCatalog\(server, deepSpiderCatalog, \{\s*runtimeManager,\s*agent: context\.agent\s*\}\)/)
   assert.doesNotMatch(source, /register(?:Script|Capture|Rebuild)Tools/)

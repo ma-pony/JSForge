@@ -1,3 +1,3 @@
 # Learned: 环境补丁
 
-> evolve_skill 自动追加，记录逆向过程中发现的新环境补丁方法。
+> 记录经验证、可复用的 Environment Recipe 方法。

@@ -20,13 +20,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '24.15.0'
           cache: 'pnpm'
 
       - name: Refresh DSH packages in this ephemeral checkout
-        run: pnpm update @deepseek-ai/dsh@latest @deepseek-ai/cordis@latest @deepseek-ai/dsh-tools@next
+        run: pnpm update @deepseek-ai/dsh@latest @deepseek-ai/dsh-host-apiproxy@next @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-tools@next --ignore-scripts
       - run: pnpm test
       - run: pnpm lint
+      - run: pnpm audit --prod --audit-level high
+      - run: pnpm exec patchright install chromium
       - run: pnpm test:integration
       - run: pnpm smoke:pack
       - name: Report DSH lockfile drift

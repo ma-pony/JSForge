@@ -31,7 +31,38 @@ try {
     false,
     'test-only DSH probe fixture was published',
   )
+  for (const requiredPath of [
+    'README.md',
+    'README_EN.md',
+    'src/browser/DialogBridge.js',
+    'src/rebuild/environment/compiler.js',
+    'src/rebuild/environment/chrome-baseline.js',
+    'dsh/cordis.patch.yml',
+    'dsh/agent-presets/spider/agent.cordis.yml',
+    'skills/deepspider/SKILL.md',
+  ]) {
+    assert.equal(
+      fs.existsSync(path.join(installedPackageRoot, requiredPath)),
+      true,
+      `missing published path: ${requiredPath}`,
+    )
+  }
+  for (const removedPath of [
+    'test',
+    'src/core/PatchGenerator.js',
+    'src/store/Store.js',
+    'src/browser/EnvBridge.js',
+    'src/env',
+  ]) {
+    assert.equal(
+      fs.existsSync(path.join(installedPackageRoot, removedPath)),
+      false,
+      `removed path was published: ${removedPath}`,
+    )
+  }
   const cliPath = path.join(installedPackageRoot, 'bin', 'cli.js')
+  const installedEnvExample = fs.readFileSync(path.join(installedPackageRoot, '.env.example'), 'utf8')
+  assert.doesNotMatch(installedEnvExample, /DEEPSPIDER_USER_DATA_DIR|browser-profile/i)
   const version = execFileSync(process.execPath, [cliPath, '--version'], { encoding: 'utf8' })
   const help = execFileSync(process.execPath, [cliPath, '--help'], { encoding: 'utf8' })
   const agentHelp = execFileSync(process.execPath, [cliPath, 'agent', '--help'], { encoding: 'utf8' })

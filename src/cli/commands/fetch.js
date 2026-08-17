@@ -4,7 +4,7 @@
 
 import initCycleTLS from 'cycletls';
 
-export async function fetchCommand(url, options = {}) {
+export async function fetchCommand(url) {
   console.log(`🚀 请求: ${url}`);
 
   try {

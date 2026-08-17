@@ -36,7 +36,7 @@ switch (first) {
       console.log('用法: deepspider fetch <url>');
       process.exit(1);
     }
-    await fetchCommand(url, { http: args.includes('--http') });
+    await fetchCommand(url);
     break;
   }
 
@@ -125,20 +125,17 @@ switch (first) {
   }
 
   default: {
-    console.log('DeepSpider - 智能爬虫工程平台');
+    console.log('DeepSpider - DSH-native JavaScript reverse-engineering platform');
     console.log('');
     console.log('Commands:');
     console.log('  deepspider agent                 Start native DSH Web');
     console.log('  deepspider agent --port <number> Set DSH Web port');
     console.log('  deepspider agent --verbose       Show DeepSpider startup info');
-    console.log('  deepspider mcp                   Start MCP server (for Claude Code)');
+    console.log('  deepspider mcp                   Start stdio MCP external adapter');
     console.log('  deepspider fetch <url>           Quick HTTP request');
     console.log('  deepspider update                Check for updates');
     console.log('  deepspider --version             Show version');
     console.log('  deepspider --help                Show help');
-    console.log('');
-    console.log('Usage with Claude Code:');
-    console.log('  claude mcp add deepspider node src/mcp/server.js');
     break;
   }
 }

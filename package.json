@@ -1,7 +1,7 @@
 {
   "name": "deepspider",
   "version": "1.0.0-beta",
-  "description": "智能爬虫工程平台 - MCP Server for Claude Code integration",
+  "description": "DSH-native JavaScript reverse-engineering platform with browser evidence and offline verification",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "main": "src/mcp/server.js",
@@ -55,12 +55,11 @@
     "node": ">=24.15.0"
   },
   "dependencies": {
-    "@deepseek-ai/cordis": "latest",
     "@deepseek-ai/dsh": "latest",
-    "@deepseek-ai/dsh-host-apiproxy": "latest",
-    "@deepseek-ai/dsh-llm": "latest",
+    "@deepseek-ai/dsh-host-apiproxy": "next",
+    "@deepseek-ai/dsh-llm": "next",
     "@deepseek-ai/dsh-tools": "next",
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "cycletls": "^2.0.5",
     "jsdom": "30.0.1",
     "patchright": "^1.57.0",
@@ -68,7 +67,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^9.39.2",
+    "eslint": "^10.8.1",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7"
   },

@@ -1,6 +1,6 @@
 /**
  * DeepSpider MCP Server
- * Exposes ~22 tools via MCP protocol for Claude Code integration
+ * Exposes the DeepSpider catalog through a stdio MCP adapter.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -9,7 +9,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createMcpContext, createMcpSessionId } from './context.js';
 import { installMcpShutdown } from './lifecycle.js';
 import { RuntimeManager } from '../runtime/RuntimeManager.js';
-import { deepSpiderCatalog } from '../tools/index.js';
+import { deepSpiderCatalog, DEEPSPIDER_TOOL_COUNT } from '../tools/index.js';
 import { registerMcpCatalog } from '../adapters/mcp-tools.js';
 
 const server = new McpServer(
@@ -35,7 +35,7 @@ installMcpShutdown({
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('DeepSpider MCP server running (51 tools registered)');
+  console.error(`DeepSpider MCP server running (${DEEPSPIDER_TOOL_COUNT} tools registered)`);
 }
 
 main().catch(async (err) => {
