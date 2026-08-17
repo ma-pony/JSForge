@@ -1,7 +1,6 @@
 export function buildProbeCode() {
   return `
-(function installDeepSpiderProbe() {
-  const emit = globalThis.__dsEmit;
+(function installDeepSpiderProbe(emit) {
   if (typeof emit !== 'function') return;
   const stack = () => {
     try { return new Error().stack; } catch { return null; }
@@ -92,7 +91,7 @@ export function buildProbeCode() {
     if (globalThis[name]) globalThis[name] = membrane(globalThis[name], name);
   }
   emit({ category: 'runtime', operation: 'probe-installed', path: 'globalThis' });
-})();
+})
 `.trimStart()
 }
 
@@ -158,6 +157,78 @@ async function awaitWithTimeout(value) {
   }
 }
 
+function createContextTraceBridge(metadata) {
+  const trace = [];
+  const traceByKey = new Map();
+  const emit = (event) => {
+    const caller = event.caller || String(event.stack || '')
+      .split('\\n')
+      .slice(1)
+      .find((line) => !/probe\\.js|env\\.js/.test(line)) || '';
+    const key = JSON.stringify([event.category, event.operation, event.path, caller]);
+    const existing = traceByKey.get(key);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+    const entry = {
+      ...event,
+      seq: trace.length + 1,
+      count: 1,
+      caller,
+      sessionId: metadata.sessionId,
+      scriptId: metadata.scriptId,
+      targetSha256: metadata.targetSha256,
+      environmentSha256: metadata.environmentSha256,
+      envSha256: metadata.envSha256,
+      probeSha256: metadata.probeSha256,
+      runnerSha256: metadata.runnerSha256,
+    };
+    trace.push(entry);
+    traceByKey.set(key, entry);
+  };
+
+  return Object.freeze({
+    installNodeGuards() {
+      for (const name of ['process', 'Buffer', 'require', 'module', 'exports', 'global', '__filename', '__dirname', 'setImmediate']) {
+        Object.defineProperty(globalThis, name, {
+          get() {
+            emit({ category: 'node-fingerprint', operation: 'get', path: name });
+            return undefined;
+          },
+          configurable: false,
+          enumerable: false,
+        });
+      }
+    },
+    beginProbeInstall() {
+      Object.defineProperty(globalThis, '__dsProbeEmit', {
+        value: emit,
+        configurable: true,
+        enumerable: false,
+        writable: false,
+      });
+    },
+    finishProbeInstall() {
+      delete globalThis.__dsProbeEmit;
+    },
+    emitDynamic(url, hash, bytes) {
+      emit({ category: 'dynamic-code', operation: 'scriptParsed', path: url || hash, sha256: hash, bytes });
+    },
+    emitRuntimeError(category, code, message) {
+      emit({
+        category,
+        operation: 'throw',
+        path: 'runtime',
+        error: { code, message },
+      });
+    },
+    serialize() {
+      return JSON.stringify(trace);
+    },
+  });
+}
+
 async function run() {
   const mode = readMode(process.argv.slice(2));
   const manifest = JSON.parse(fs.readFileSync(path.join(taskDir, 'manifest.json'), 'utf8'));
@@ -175,26 +246,23 @@ async function run() {
   const runId = startedAt.replace(/[^0-9]/g, '').slice(0, 17) + '-' + randomUUID().slice(0, 8);
   const runDir = path.join(taskDir, 'runs', runId);
   fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
-  const trace = [];
-  const traceByKey = new Map();
-  let envSha256 = null;
-  let probeSha256 = null;
-  const emit = (event) => {
-    const caller = event.caller || String(event.stack || '')
-      .split('\\n')
-      .slice(1)
-      .find((line) => !/probe\\.js|env\\.js/.test(line)) || '';
-    const key = JSON.stringify([event.category, event.operation, event.path, caller]);
-    const existing = traceByKey.get(key);
-    if (existing) {
-      existing.count += 1;
-      return;
-    }
-    const entry = {
-      ...event,
-      seq: trace.length + 1,
-      count: 1,
-      caller,
+  const envCode = fs.readFileSync(path.join(taskDir, 'env.js'), 'utf8');
+  const envSha256 = sha256(envCode);
+  const probeCode = mode === 'probe'
+    ? fs.readFileSync(path.join(taskDir, 'probe.js'), 'utf8')
+    : null;
+  const probeSha256 = probeCode === null ? null : sha256(probeCode);
+
+  let output = null;
+  let failure = null;
+  let inspectorSession = null;
+  let traceBridge = null;
+  const dynamicPending = [];
+  let captureDynamic = false;
+  try {
+    const sandbox = Object.create(null);
+    const context = vm.createContext(sandbox, { name: 'DeepSpiderRebuild' });
+    const bootstrapSource = '(' + createContextTraceBridge.toString() + ')(' + JSON.stringify({
       sessionId: manifest.sessionId,
       scriptId: manifest.scriptId,
       targetSha256: manifest.targetSha256,
@@ -202,46 +270,22 @@ async function run() {
       envSha256,
       probeSha256,
       runnerSha256,
-    };
-    trace.push(entry);
-    traceByKey.set(key, entry);
-  };
-
-  let output = null;
-  let failure = null;
-  let inspectorSession = null;
-  const dynamicPending = [];
-  let captureDynamic = false;
-  try {
-    const sandbox = {};
+    }) + ')';
+    traceBridge = new vm.Script(bootstrapSource, { filename: 'runtime-bootstrap.js' })
+      .runInContext(context, { timeout: runtimeTimeoutMs });
     if (mode === 'probe') {
-      Object.defineProperty(sandbox, '__dsEmit', {
-        value: emit,
-        configurable: false,
-        enumerable: false,
-        writable: false,
-      });
-      const nodeNames = new Set(['process', 'Buffer', 'require', 'module', 'exports', 'global', '__filename', '__dirname', 'setImmediate']);
-      for (const name of nodeNames) {
-        Object.defineProperty(sandbox, name, {
-          get() {
-            emit({ category: 'node-fingerprint', operation: 'get', path: name });
-            return undefined;
-          },
-          configurable: false,
-          enumerable: false,
-        });
-      }
+      traceBridge.installNodeGuards();
     }
-    const context = vm.createContext(sandbox, { name: 'DeepSpiderRebuild' });
-    const envCode = fs.readFileSync(path.join(taskDir, 'env.js'), 'utf8');
-    envSha256 = sha256(envCode);
     new vm.Script(envCode, { filename: 'env.js' }).runInContext(context, { timeout: runtimeTimeoutMs });
 
     if (mode === 'probe') {
-      const probeCode = fs.readFileSync(path.join(taskDir, 'probe.js'), 'utf8');
-      probeSha256 = sha256(probeCode);
-      new vm.Script(probeCode, { filename: 'probe.js' }).runInContext(context, { timeout: runtimeTimeoutMs });
+      traceBridge.beginProbeInstall();
+      try {
+        new vm.Script('(' + probeCode + ')(globalThis.__dsProbeEmit)', { filename: 'probe.js' })
+          .runInContext(context, { timeout: runtimeTimeoutMs });
+      } finally {
+        traceBridge.finishProbeInstall();
+      }
 
       inspectorSession = new inspector.Session();
       inspectorSession.connect();
@@ -264,7 +308,7 @@ async function run() {
             } else {
               fs.writeFileSync(dynamicFile, scriptSource, { mode: 0o600 });
             }
-            emit({ category: 'dynamic-code', operation: 'scriptParsed', path: url || hash, sha256: hash, bytes: Buffer.byteLength(scriptSource) });
+            traceBridge.emitDynamic(url, hash, Buffer.byteLength(scriptSource));
           });
         dynamicPending.push(pending);
       });
@@ -288,12 +332,9 @@ async function run() {
     const category = ['E_RUNTIME_TIMEOUT', 'ERR_SCRIPT_EXECUTION_TIMEOUT'].includes(error.code)
       ? 'runtime-timeout'
       : 'runtime-exception';
-    emit({
-      category,
-      operation: 'throw',
-      path: 'runtime',
-      error: { code: error.code || 'E_RUNTIME', message: error.message },
-    });
+    if (traceBridge) {
+      traceBridge.emitRuntimeError(category, error.code || 'E_RUNTIME', error.message);
+    }
     throw error;
   } finally {
     if (inspectorSession) inspectorSession.disconnect();
@@ -314,6 +355,7 @@ async function run() {
       startedAt,
       finishedAt,
     });
+    const trace = traceBridge ? JSON.parse(traceBridge.serialize()) : [];
     const traceText = trace.map((event) => JSON.stringify(event)).join('\\n');
     fs.writeFileSync(path.join(runDir, 'trace.ndjson'), traceText ? traceText + '\\n' : '', { mode: 0o600 });
   }

@@ -62,7 +62,9 @@ export const tools = Object.freeze([
         const extracts = await Promise.all(matches.slice(0, 3).map(async (match) => {
           try {
             const source = await runtime.dataStore.getScript(match.site, match.id)
-            const matchAt = source.indexOf(text)
+            const normalizedSource = source.toLowerCase()
+            const normalizedText = text.toLowerCase()
+            const matchAt = normalizedSource.indexOf(normalizedText)
             if (matchAt === -1) {
               return {
                 site: match.site, scriptId: match.id, scriptUrl: match.url,
@@ -77,7 +79,7 @@ export const tools = Object.freeze([
               scriptUrl: match.url,
               offset,
               matchAt,
-              code: source.slice(offset, Math.min(source.length, matchAt + text.length + half)),
+              code: source.slice(offset, Math.min(source.length, matchAt + normalizedText.length + half)),
               totalLength: source.length,
             }
           } catch {

@@ -210,14 +210,13 @@ node bin/cli.js --version
 
 ## Environment variables and Session artifacts
 
-The browser runtime supports two environment variables:
+The browser runtime supports a headless-mode environment variable:
 
 ```bash
 export DEEPSPIDER_HEADLESS=true
-export DEEPSPIDER_USER_DATA_DIR=/absolute/path/to/browser-profile
 ```
 
-DeepSpider does not automatically load a project-root `.env` file. A persistent profile may contain authenticated sessions and should only use a trusted directory with controlled permissions.
+DeepSpider does not automatically load a project-root `.env` file.
 
 Each Agent Session stores artifacts under:
 

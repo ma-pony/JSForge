@@ -123,3 +123,35 @@ test('DataStore requires a non-empty absolute root', () => {
   assert.throws(() => new DataStore({ root: '' }), /non-empty absolute path/)
   assert.throws(() => new DataStore({ root: 'relative/data' }), /non-empty absolute path/)
 })
+
+test('DataStore scans complete response and script files after a prefix-index miss', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-data-store-search-'))
+  const store = new DataStore({ root: path.join(temporary, 'data') })
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+
+  store.startSession()
+  const prefix = 'x'.repeat(1200)
+  const response = await store.saveResponse({
+    url: 'https://search.test/api/data',
+    method: 'POST',
+    status: 200,
+    responseBody: `${prefix} ResponseSuffixNeedle`,
+    pageUrl: 'https://search.test/app',
+  })
+  const script = await store.saveScript({
+    url: 'https://search.test/assets/app.js',
+    type: 'external',
+    source: `${prefix} const MixedCaseScriptNeedle = true`,
+    pageUrl: 'https://search.test/app',
+  })
+
+  assert.deepEqual(
+    (await store.searchInResponses('responsesuffixneedle')).map(({ id }) => id),
+    [response.id],
+  )
+  const matches = await store.searchInScripts('mixedcasescriptneedle')
+  assert.equal(matches.length, 1)
+  assert.equal(matches[0].id, script.id)
+  assert.equal(matches[0].matchIndex, prefix.length + ' const '.length)
+  assert.match(matches[0].context, /MixedCaseScriptNeedle/)
+})

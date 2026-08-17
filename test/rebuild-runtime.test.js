@@ -84,6 +84,49 @@ test('verify mode executes the unchanged target in a realm without Node globals'
   assert.doesNotMatch(buildRunnerCode(), /require\(['"]\.\/target\.js/)
 })
 
+test('probe and verify targets cannot recover the Node host or built-in modules through realm bridges', () => {
+  const directory = createBundle({
+    targetSource: `
+const nodeLeaks = [];
+const builtinLeaks = [];
+const inspectConstructor = (label, constructor) => {
+  if (typeof constructor !== 'function') return;
+  try {
+    const hostProcess = constructor('return process')();
+    if (hostProcess && hostProcess.versions && hostProcess.versions.node) {
+      nodeLeaks.push(label);
+    }
+  } catch {}
+  try {
+    const fs = constructor('return process.getBuiltinModule("node:fs")')();
+    if (fs && typeof fs.readFileSync === 'function') {
+      builtinLeaks.push(label);
+    }
+  } catch {}
+};
+
+inspectConstructor('global-constructor', globalThis.constructor && globalThis.constructor.constructor);
+const globalPrototype = Object.getPrototypeOf(globalThis);
+inspectConstructor('global-prototype', globalPrototype && globalPrototype.constructor && globalPrototype.constructor.constructor);
+const eventDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__dsEmit');
+inspectConstructor('event-bridge', eventDescriptor && eventDescriptor.value && eventDescriptor.value.constructor);
+const installerDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__dsProbeEmit');
+inspectConstructor('probe-installer-bridge', installerDescriptor && installerDescriptor.value && installerDescriptor.value.constructor);
+const processDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'process');
+inspectConstructor('descriptor-getter', processDescriptor && processDescriptor.get && processDescriptor.get.constructor);
+
+globalThis.inspectHostIsolation = () => ({ nodeLeaks, builtinLeaks });
+`,
+    callExpression: 'window.inspectHostIsolation()',
+  })
+
+  for (const mode of ['probe', 'verify']) {
+    const result = runBundle(directory, mode)
+    assert.equal(result.status, 0, `${mode}: ${result.stderr}`)
+    assert.deepEqual(JSON.parse(result.stdout), { nodeLeaks: [], builtinLeaks: [] })
+  }
+})
+
 test('runner rejects a target whose bytes no longer match the manifest', () => {
   const directory = createBundle()
   fs.appendFileSync(path.join(directory, 'target.js'), '\n// changed')

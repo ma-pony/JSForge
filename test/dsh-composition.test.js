@@ -110,6 +110,17 @@ test('both READMEs retain the full native DSH product contract', () => {
   }
 })
 
+test('both READMEs keep browser data scoped to each Session without a custom profile override', () => {
+  for (const { file, content } of readmes) {
+    assert.match(content, /browser-data\//, `${file} must document per-Session browser data`)
+    assert.doesNotMatch(
+      content,
+      /DEEPSPIDER_USER_DATA_DIR|browser-profile/i,
+      `${file} must not advertise an unsupported shared browser profile`,
+    )
+  }
+})
+
 test('Spider Preset exposes only the approved general and DeepSpider capabilities', () => {
   const presetRoot = path.join(projectRoot, 'dsh', 'agent-presets', 'spider')
   const metadata = loadYaml(path.join(presetRoot, 'preset.yml'))

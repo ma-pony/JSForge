@@ -52,3 +52,32 @@ test('script definitions expose the canonical direct Runtime contract', async ()
     },
   )
 })
+
+test('find_in_script returns valid context for a case-insensitive DataStore match', async () => {
+  const source = 'before MixedCaseNeedle after'
+  const runtime = {
+    dataStore: {
+      async searchInScripts() {
+        return [{
+          id: 'script-current',
+          site: 'example.test',
+          url: 'https://example.test/app.js',
+          matchIndex: 7,
+        }]
+      },
+      async getScript() {
+        return source
+      },
+    },
+  }
+
+  const result = await definition('find_in_script').execute(
+    runtime,
+    { text: 'mixedcaseneedle', contextChars: 12 },
+    undefined,
+  )
+
+  assert.equal(result.found, true)
+  assert.equal(result.extracts[0].matchAt, 7)
+  assert.match(result.extracts[0].code, /MixedCaseNeedle/)
+})

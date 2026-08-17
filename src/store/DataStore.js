@@ -579,10 +579,8 @@ export class DataStore {
    * 搜索响应内容（支持按站点过滤）
    *
    * 策略：
-   * 1. 对在内存索引中有记录的条目，先用 keywords 做快速过滤
-   * 2. keywords 命中 → 读取磁盘文件获取完整内容确认匹配
-   * 3. keywords 不命中 → 跳过（接受极少量漏报：搜索词仅在 body 的 1000 字符之后）
-   * 4. 不在索引中的条目（旧数据）→ 直接读磁盘（兜底扫描）
+   * 1. 前 1000 字符内存索引只作为加速提示
+   * 2. 无论索引是否命中，都读取磁盘中的完整内容确认匹配
    */
   async searchInResponses(text, site = null) {
     const results = [];
@@ -591,49 +589,23 @@ export class DataStore {
 
     for (const s of sites) {
       const index = await this.getSiteIndex(s.hostname);
-      const siteIdx = this.searchIndex.get(s.hostname);
-      const responseMap = siteIdx?.responses;
+      const responseMap = this.searchIndex.get(s.hostname)?.responses;
 
       for (const meta of index.responses) {
         try {
-          if (responseMap && responseMap.has(meta.id)) {
-            // 在内存索引中：先用关键词快速过滤
-            const keywords = responseMap.get(meta.id);
-            if (!keywords.includes(searchText)) {
-              // 关键词不命中，跳过
-              // 注意：URL 始终在 keywords 中，body 前 1000 字符也在
-              // 对大多数搜索场景（API 路径、关键字段名、token 等）覆盖率足够
-              continue;
-            }
-            // 关键词命中，读磁盘确认（keywords 只含前 1000 字符，需全量匹配）
-            const content = await readFile(meta.file, 'utf-8');
-            const data = JSON.parse(content);
-            const matchesBody = data.responseBody?.toLowerCase().includes(searchText);
-            const matchesUrl = data.url?.toLowerCase().includes(searchText);
-            const matchesRequest = data.requestBody?.toLowerCase().includes(searchText);
-            if (matchesBody || matchesUrl || matchesRequest) {
-              results.push({
-                site: s.hostname,
-                id: meta.id, url: meta.url, path: meta.path,
-                method: meta.method, status: meta.status,
-                timestamp: meta.timestamp
-              });
-            }
-          } else {
-            // 不在内存索引（旧数据），回退到全量磁盘读取
-            const content = await readFile(meta.file, 'utf-8');
-            const data = JSON.parse(content);
-            const matchesBody = data.responseBody?.toLowerCase().includes(searchText);
-            const matchesUrl = data.url?.toLowerCase().includes(searchText);
-            const matchesRequest = data.requestBody?.toLowerCase().includes(searchText);
-            if (matchesBody || matchesUrl || matchesRequest) {
-              results.push({
-                site: s.hostname,
-                id: meta.id, url: meta.url, path: meta.path,
-                method: meta.method, status: meta.status,
-                timestamp: meta.timestamp
-              });
-            }
+          const content = await readFile(meta.file, 'utf-8');
+          const data = JSON.parse(content);
+          const matchesIndexedPrefix = responseMap?.get(meta.id)?.includes(searchText) === true;
+          const matchesBody = data.responseBody?.toLowerCase().includes(searchText);
+          const matchesUrl = data.url?.toLowerCase().includes(searchText);
+          const matchesRequest = data.requestBody?.toLowerCase().includes(searchText);
+          if (matchesIndexedPrefix || matchesBody || matchesUrl || matchesRequest) {
+            results.push({
+              site: s.hostname,
+              id: meta.id, url: meta.url, path: meta.path,
+              method: meta.method, status: meta.status,
+              timestamp: meta.timestamp
+            });
           }
         } catch { /* skip */ }
       }
@@ -645,10 +617,8 @@ export class DataStore {
    * 搜索脚本内容（支持按站点过滤）
    *
    * 策略：
-   * 1. 对在内存索引中有记录的条目，先用 keywords 做快速过滤
-   * 2. keywords 命中 → 读取磁盘文件获取完整内容（提取匹配上下文）
-   * 3. keywords 不命中 → 跳过（大多数脚本搜索词都在前 1000 字符范围内）
-   *    例外：若索引中没有该条目，则回退到磁盘扫描
+   * 1. 前 1000 字符内存索引只作为加速提示
+   * 2. 无论索引是否命中，都读取磁盘中的完整源码并用同一标准化文本定位上下文
    */
   async searchInScripts(text, site = null) {
     const results = [];
@@ -657,47 +627,28 @@ export class DataStore {
 
     for (const s of sites) {
       const index = await this.getSiteIndex(s.hostname);
-      const siteIdx = this.searchIndex.get(s.hostname);
-      const scriptMap = siteIdx?.scripts;
+      const scriptMap = this.searchIndex.get(s.hostname)?.scripts;
 
       for (const meta of index.scripts) {
         try {
-          if (scriptMap && scriptMap.has(meta.id)) {
-            // 在内存索引中：先用关键词快速过滤
-            const keywords = scriptMap.get(meta.id);
-            if (!keywords.includes(searchText)) {
-              // 关键词不命中，跳过（接受极少量漏报：搜索词仅在 1000 字符之后的脚本）
-              continue;
-            }
-            // 关键词命中，读磁盘获取完整内容以提取上下文
-            const source = await readFile(meta.file, 'utf-8');
-            const idx = source.toLowerCase().indexOf(searchText);
-            if (idx !== -1) {
-              const start = Math.max(0, idx - 50);
-              const end = Math.min(source.length, idx + text.length + 50);
-              results.push({
-                site: s.hostname,
-                id: meta.id, url: meta.url, type: meta.type,
-                matchIndex: idx,
-                context: source.slice(start, end),
-                timestamp: meta.timestamp
-              });
-            }
-          } else {
-            // 不在内存索引（旧数据），回退到全量磁盘读取
-            const source = await readFile(meta.file, 'utf-8');
-            const idx = source.toLowerCase().indexOf(searchText);
-            if (idx !== -1) {
-              const start = Math.max(0, idx - 50);
-              const end = Math.min(source.length, idx + text.length + 50);
-              results.push({
-                site: s.hostname,
-                id: meta.id, url: meta.url, type: meta.type,
-                matchIndex: idx,
-                context: source.slice(start, end),
-                timestamp: meta.timestamp
-              });
-            }
+          const source = await readFile(meta.file, 'utf-8');
+          let idx = -1;
+          if (scriptMap?.get(meta.id)?.includes(searchText)) {
+            idx = source.slice(0, 1000).toLowerCase().indexOf(searchText);
+          }
+          if (idx === -1) {
+            idx = source.toLowerCase().indexOf(searchText);
+          }
+          if (idx !== -1) {
+            const start = Math.max(0, idx - 50);
+            const end = Math.min(source.length, idx + searchText.length + 50);
+            results.push({
+              site: s.hostname,
+              id: meta.id, url: meta.url, type: meta.type,
+              matchIndex: idx,
+              context: source.slice(start, end),
+              timestamp: meta.timestamp
+            });
           }
         } catch { /* skip */ }
       }

@@ -210,14 +210,13 @@ node bin/cli.js --version
 
 ## 环境变量与 Session 产物
 
-浏览器运行时支持两个环境变量：
+浏览器运行时支持无头模式环境变量：
 
 ```bash
 export DEEPSPIDER_HEADLESS=true
-export DEEPSPIDER_USER_DATA_DIR=/absolute/path/to/browser-profile
 ```
 
-DeepSpider 不会自动加载项目根目录的 `.env`。持久化 profile 可能包含登录态，只应使用权限受控的可信目录。
+DeepSpider 不会自动加载项目根目录的 `.env`。
 
 每个 Agent Session 的产物保存在：
 
