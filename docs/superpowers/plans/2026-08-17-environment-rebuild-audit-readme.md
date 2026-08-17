@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the handwritten single-Session environment shim with a jsdom-based Recipe runtime, separate observation from instrumentation, connect the browser Dialog to the owning DSH Agent, remove the superseded architecture, and publish accurate bilingual documentation.
+**Goal:** Replace the handwritten single-Session environment shim with a jsdom-based Recipe runtime, separate observation from instrumentation, connect the browser Dialog to the owning DSH Agent and native question protocol, remove the superseded architecture, and publish accurate bilingual documentation.
 
 **Architecture:** Patchright runs in `observe` mode by default and stores page-specific evidence in the Session DataStore. Rebuild tasks combine one fixed Chrome baseline, separated Session evidence, explicit Recipe rules, DataStore replay, and optional recorded working-source transforms inside a per-run jsdom Realm. Probe produces Recipe candidates; Verify proves the reconstructed algorithm offline.
 
@@ -440,10 +440,11 @@ git commit -m "feat(rebuild): replay captured evidence and suggest recipes"
 
 **Interfaces:**
 - Produces: `BrowserClient.openDialog()`, `closeDialog()`, and `sendDialogMessage(payload)`.
-- Produces: `RuntimeManager.setDialogHandler(handler)`, `handleDialogMessage(event)`, and `sendDialog(sessionId, payload)`.
-- Produces: `DeepSpiderRuntime` constructor option `onDialogMessage`; the Runtime assigns it to its owned BrowserClient and exposes `sendDialog(payload)`.
+- Produces: `RuntimeManager.setDialogHandler(handler)`, `handleDialogMessage(event)`, and `sendDialog(sessionId, payload, { open })`.
+- Produces: `DeepSpiderRuntime` constructor option `onDialogMessage`; the Runtime assigns it to its owned BrowserClient and exposes `sendDialog(payload, { open })`.
 - Produces: catalog tool `browser_dialog({ action: 'open' | 'close' })`.
 - Consumes: DSH `agents` service, `session/event`, and `createUserMessage()` from direct dependency `@deepseek-ai/dsh-llm`.
+- Consumes: public `InProcessApiClient`, `toFetchHandler()`, `events.mux()`, and `respond()` from direct dependency `@deepseek-ai/dsh-host-apiproxy`.
 
 - [ ] **Step 1: Write the bridge, ownership, and catalog tests**
 
@@ -468,17 +469,82 @@ test('browser_dialog opens without installing Probe hooks', async () => {
   assert.equal(result.mode, 'interactive')
   assert.equal(runtime.browserClient.probeActivated, false)
 })
+
+test('native DSH question is shown only in its owning Dialog', async () => {
+  const { mux, manager } = createHostHarness()
+  mux.push({
+    rpcId: 'question-rpc',
+    payload: {
+      type: 'question/requested',
+      sessionId: 'agent-a',
+      questions: [{
+        id: 'strategy',
+        question: 'Choose a strategy',
+        options: [{ label: 'Hook' }, { label: 'Replay' }],
+        multiSelect: false,
+      }],
+    },
+  })
+  await mux.flush()
+  assert.deepEqual(manager.openedFor, ['agent-a'])
+  assert.equal(manager.sent.some((item) => item.sessionId === 'agent-b'), false)
+})
+
+test('Dialog returns the exact native DSH answer envelope', async () => {
+  const { manager, questionClient } = createHostHarness()
+  await manager.handleDialogMessage({
+    sessionId: 'agent-a',
+    message: {
+      type: 'question/answer',
+      rpcId: 'question-rpc',
+      answers: [{ id: 'strategy', selected: ['Hook'] }],
+    },
+  })
+  assert.deepEqual(questionClient.responses, [{
+    type: 'client-response',
+    rpcId: 'question-rpc',
+    result: {
+      ok: true,
+      value: {
+        sessionId: 'agent-a',
+        answer: { answers: [{ id: 'strategy', selected: ['Hook'] }] },
+      },
+    },
+  }])
+})
+
+test('question/resolved clears a question answered from another DSH surface', async () => {
+  const { mux, manager } = createHostHarness()
+  mux.push({
+    rpcId: 'resolved-frame',
+    payload: {
+      type: 'question/resolved',
+      sessionId: 'agent-a',
+      questionRpcId: 'question-rpc',
+      outcome: 'answered',
+    },
+  })
+  await mux.flush()
+  assert.deepEqual(manager.sent.at(-1), {
+    sessionId: 'agent-a',
+    payload: {
+      type: 'question/resolved',
+      questionRpcId: 'question-rpc',
+      outcome: 'answered',
+    },
+  })
+})
 ```
 
 - [ ] **Step 2: Run Dialog tests and verify RED**
 
 Run: `node --test test/browser-dialog.test.js test/dsh-host-plugin.test.js test/tool-catalog.test.js test/runtime-state-isolation.test.js`
 
-Expected: FAIL because the bridge, tool, manager routing, and DSH message dependency do not exist.
+Expected: FAIL because the bridge, tool, manager routing, DSH message dependency, and native question bridge do not exist.
 
 - [ ] **Step 3: Implement one Session-owned Dialog bridge**
 
-Run: `pnpm add @deepseek-ai/dsh-llm@latest`
+Run: `pnpm add @deepseek-ai/dsh-llm@latest @deepseek-ai/dsh-host-apiproxy@latest`
 
 Refactor `analysisPanel.js` to initialize its own small UI state instead of requiring the full HookBase. `DialogBridge.open(page)` lazily calls `Runtime.addBinding`, evaluates the panel installer in the top frame and current child frames, and subscribes once. `close()` removes the UI and listener. `send(payload)` calls the panel receive function with JSON-owned data.
 
@@ -493,15 +559,31 @@ agent.followup(createUserMessage({
 }))
 ```
 
-`RuntimeManager._getRuntime()` passes `{ signal, onDialogMessage }` as the second `runtimeFactory` argument. The default factory constructs `DeepSpiderRuntime` with that callback; `DeepSpiderRuntime._createBrowserClient()` assigns `client.onMessage` to a Session-tagged wrapper. `sendDialog(sessionId, payload)` resolves only an already-created matching Runtime and calls `runtime.sendDialog(payload)`.
+`RuntimeManager._getRuntime()` passes `{ signal, onDialogMessage }` as the second `runtimeFactory` argument. The default factory constructs `DeepSpiderRuntime` with that callback; `DeepSpiderRuntime._createBrowserClient()` assigns `client.onMessage` to a Session-tagged wrapper. `sendDialog(sessionId, payload, { open })` resolves only an already-created matching Runtime and calls `runtime.sendDialog(payload, { open })`; it never creates a Runtime merely because a question arrived.
 
-In `host-plugin.apply()`, call `manager.setDialogHandler()` with the DSH follow-up handler. Subscribe to `session/event`; for `assistant/message`, join only text blocks from `event.data.message.content`; forward that text plus `turn/start` and `turn/end` status to only the Runtime whose ID equals `String(session.id)`. Runtime close disposes the Dialog bridge. Retain the panel's existing choice/confirm rendering unchanged; do not create a second DSH ask-user protocol.
+In `host-plugin.apply()`, call `manager.setDialogHandler()` with the DSH follow-up handler. Subscribe to `session/event`; for `assistant/message`, join only text blocks from `event.data.message.content`; forward that text plus `turn/start` and `turn/end` status to only the Runtime whose ID equals `String(session.id)`. Runtime close disposes the Dialog bridge.
+
+Add `apiProxy` to the Host plugin injection list. Build an `InProcessApiClient` over `toFetchHandler(ctx.apiProxy)` and consume its public all-Session `events.mux()` stream under a Host-owned abort signal. Route only these two native frames:
+
+- `question/requested`: forward `{ type, rpcId, questions }` to the matching existing Runtime with `{ open: true }`;
+- `question/resolved`: forward `{ type, questionRpcId, outcome }` to the matching Runtime so stale controls are disabled or removed.
+
+Do not call `ctx.userQuestions.registerProvider()`: `dsh-host-apiproxy` already owns the single provider and its pending table. When the Dialog emits `question/answer`, call the public client `respond()` with the original `rpcId` and this exact success value:
+
+```js
+{
+  sessionId,
+  answer: { answers: message.answers },
+}
+```
+
+The panel renders a complete DSH ask batch, keeps question order and IDs, uses option labels in `selected`, supports `multiSelect`, and omits blank `custom` values. It submits the batch once. A `{ accepted: false, reason: 'not-pending' }` receipt means another DSH surface already answered; clear the pending UI and do not retry. DSH Host remains authoritative and broadcasts `question/resolved` to every surface.
 
 - [ ] **Step 4: Run Dialog, DSH, tool, and multi-Session tests**
 
 Run: `node --test test/browser-dialog.test.js test/dsh-host-plugin.test.js test/tool-catalog.test.js test/runtime-state-isolation.test.js test/runtime-manager.test.js`
 
-Expected: PASS; no message crosses Session ownership and Dialog installation does not activate Probe.
+Expected: PASS; no chat or question crosses Session ownership, native answer envelopes are exact, first-answer resolution converges, and Dialog installation does not activate Probe.
 
 - [ ] **Step 5: Commit Task 5**
 

@@ -13,7 +13,7 @@ This design replaces that path with a small evidence-driven system inspired by s
 - Replace handwritten DOM and fake Web API shims with upstream jsdom plus DeepSpider-controlled handlers.
 - Allow fixed fingerprints, known jsdom/Node concealment, site-specific rules, and traceable derived-source edits when they are the simplest reliable solution.
 - Preserve the original captured script and all evidence.
-- Make the existing in-page Dialog usable for element selection and conversation with the owning DSH Agent.
+- Make the existing in-page Dialog usable for element selection, conversation, and native DSH questions with the owning Agent.
 - Remove obsolete environment and UI implementations only after their required capabilities have replacements.
 - Finish the repository audit and rewrite the Chinese and English READMEs against the implemented product.
 
@@ -154,9 +154,28 @@ The bridge supports:
 - element and iframe selection;
 - text editing and submission;
 - chat with the owning DSH Agent;
+- DSH `ask_user_question` batches, including single choice, multiple choice, and custom text answers;
 - Agent status and response rendering.
 
 `BrowserClient.onMessage` is connected to a Session-scoped bridge, and Agent output is sent back to the same page. Page switch and Runtime close remove listeners and UI state.
+
+Questions reuse the public DSH Host API instead of registering another `userQuestions` provider. The Host plugin consumes `question/requested` and `question/resolved` from the public mux stream. A request is forwarded only to the Runtime whose Session ID matches the event. If that Runtime already owns a page, the question opens its Dialog; a question never launches a browser by itself. The Dialog submits the complete answer batch through the public `respond()` contract:
+
+```js
+{
+  type: 'client-response',
+  rpcId,
+  result: {
+    ok: true,
+    value: {
+      sessionId,
+      answer: { answers: [{ id, selected, custom }] },
+    },
+  },
+}
+```
+
+`selected` contains option labels, matching DSH's native contract. `custom` is omitted when unused. DSH Host remains the only owner of pending state and validates the answer against the original batch. The Web UI and browser Dialog may both display the same question; DSH's existing first-claimant-wins behavior settles it once, and `question/resolved` clears the other surface. DeepSpider does not maintain a parallel question registry or invent a second choice protocol.
 
 The standalone `selector.js`, `confirmDialog.js`, and `panel.html` are deleted only after their useful behavior is covered by `analysisPanel.js` tests. The selection and conversation capability itself is retained.
 
@@ -176,6 +195,7 @@ Existing tools are evolved rather than adding a workflow platform:
 - `export_rebuild_bundle` writes separated evidence and an initial Recipe;
 - `analyze_runtime_trace` returns candidate Recipe rules;
 - one Dialog tool opens or closes the interactive panel.
+- the Dialog consumes and answers native DSH question batches without replacing DSH's provider.
 
 The published tool count is derived from the catalog and is not treated as an invariant.
 
@@ -245,7 +265,8 @@ The change is complete when:
 - fetch/XHR no longer fabricate success on replay misses;
 - the original target hash never changes and every working-source transform is recorded;
 - Probe produces applicable Recipe candidates and Verify succeeds offline;
-- the Dialog can select an element, send a message, and render the owning Agent's response;
+- the Dialog can select an element, send a message, render the owning Agent's response, and answer a native DSH question batch;
+- questions and answers never cross Session ownership, and the DSH Web UI and browser Dialog converge through `question/resolved`;
 - obsolete modules are absent from source and the packed tarball;
 - unit, lint, real integration, packed-install, dry-pack, and dependency-audit checks pass;
 - both READMEs match the implemented release.
