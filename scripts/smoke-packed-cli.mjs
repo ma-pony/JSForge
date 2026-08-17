@@ -26,6 +26,11 @@ try {
     stdio: 'inherit',
   })
   const installedPackageRoot = path.join(installDir, 'node_modules', 'deepspider')
+  assert.equal(
+    fs.existsSync(path.join(installedPackageRoot, 'test', 'fixtures', 'dsh', 'host-probe-plugin.js')),
+    false,
+    'test-only DSH probe fixture was published',
+  )
   const cliPath = path.join(installedPackageRoot, 'bin', 'cli.js')
   const version = execFileSync(process.execPath, [cliPath, '--version'], { encoding: 'utf8' })
   const help = execFileSync(process.execPath, [cliPath, '--help'], { encoding: 'utf8' })

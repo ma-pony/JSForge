@@ -61,11 +61,15 @@ export class RuntimeManager {
     this.entries = new Map()
     this.closing = false
     this._inFlightDisposals = new Set()
+    this._disposalsById = new Map()
     this._closePromise = null
   }
 
   async get(agent, { signal } = {}) {
     const id = agentId(agent)
+    throwIfAborted(signal)
+    this._rejectIfClosing()
+    await this._waitForDisposal(id, signal)
     throwIfAborted(signal)
     this._rejectIfClosing()
 
@@ -79,6 +83,9 @@ export class RuntimeManager {
   async run(agent, operation, { signal } = {}) {
     const id = agentId(agent)
     if (typeof operation !== 'function') throw new TypeError('operation must be a function')
+    throwIfAborted(signal)
+    this._rejectIfClosing()
+    await this._waitForDisposal(id, signal)
     throwIfAborted(signal)
     this._rejectIfClosing()
 
@@ -109,16 +116,23 @@ export class RuntimeManager {
 
   async disposeAgent(agent, reason) {
     const id = agentId(agent)
+    const pending = this._disposalsById.get(id)
+    if (pending) return pending
+
     const entry = this.entries.get(id)
     if (!entry) return
 
     this.entries.delete(id)
     entry.abortController.abort(abortError(reason || `Agent ${id} disposed`))
     const disposal = this._closeEntry(entry, reason)
+    this._disposalsById.set(id, disposal)
     this._inFlightDisposals.add(disposal)
     try {
       await disposal
     } finally {
+      if (this._disposalsById.get(id) === disposal) {
+        this._disposalsById.delete(id)
+      }
       this._inFlightDisposals.delete(disposal)
     }
   }
@@ -152,6 +166,11 @@ export class RuntimeManager {
 
   _rejectIfClosing() {
     if (this.closing) throw new Error('RuntimeManager is closing')
+  }
+
+  _waitForDisposal(id, signal) {
+    const disposal = this._disposalsById.get(id)
+    return disposal ? waitForSignal(disposal, signal) : Promise.resolve()
   }
 
   _getOrCreateEntry(id, agent) {

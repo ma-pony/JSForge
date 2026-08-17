@@ -281,6 +281,50 @@ test('disposeAgent closes and removes only the exact Agent Runtime', async () =>
   assert.notEqual(await manager.get({ id: 'alpha' }), alpha)
 })
 
+test('a resumed Session waits for its browser-data close without blocking other IDs', async () => {
+  const closeStarted = deferred()
+  const releaseClose = deferred()
+  const creations = []
+  const browserDataRoot = '/sessions/alpha/browser-data'
+  const openBrowserDataRoots = new Set()
+  const manager = new RuntimeManager({
+    runtimeFactory: async (agent) => {
+      creations.push(agent.id)
+      if (agent.id === 'alpha') {
+        assert.equal(openBrowserDataRoots.has(browserDataRoot), false)
+        openBrowserDataRoots.add(browserDataRoot)
+      }
+      return createRuntime(`${agent.id}-${creations.length}`, {
+        close: agent.id === 'alpha'
+          ? async () => {
+              closeStarted.resolve()
+              await releaseClose.promise
+              openBrowserDataRoots.delete(browserDataRoot)
+            }
+          : undefined,
+      })
+    },
+  })
+  const firstAlpha = await manager.get({ id: 'alpha' })
+
+  const disposing = manager.disposeAgent({ id: 'alpha' }, 'resume Session')
+  await closeStarted.promise
+  const resumedAlpha = manager.get({ id: 'alpha' })
+  const beta = await manager.get({ id: 'beta' })
+  await setImmediate()
+
+  assert.deepEqual(creations, ['alpha', 'beta'])
+  assert.equal(beta.id, 'beta-2')
+
+  releaseClose.resolve()
+  await disposing
+  const secondAlpha = await resumedAlpha
+  assert.notEqual(secondAlpha, firstAlpha)
+  assert.deepEqual(creations, ['alpha', 'beta', 'alpha'])
+  await manager.closeAll('test complete')
+  assert.equal(openBrowserDataRoots.size, 0)
+})
+
 test('closeAll waits for an exact disposal that began during Runtime creation', async () => {
   const creation = deferred()
   const closeStarted = deferred()
