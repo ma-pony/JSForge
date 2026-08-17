@@ -52,7 +52,7 @@
     "url": "https://github.com/ma-pony/deepspider/issues"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.15.0"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "latest",
@@ -60,6 +60,7 @@
     "@deepseek-ai/dsh-tools": "next",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "cycletls": "^2.0.5",
+    "jsdom": "30.0.1",
     "patchright": "^1.57.0",
     "zod": "^4.3.6"
   },

@@ -30,6 +30,7 @@ test('manifest has the exact direct runtime dependency surface', () => {
     '@deepseek-ai/dsh-tools',
     '@modelcontextprotocol/sdk',
     'cycletls',
+    'jsdom',
     'patchright',
     'zod',
   ])
@@ -43,8 +44,8 @@ test('pnpm release-age policy covers the current DSH package scope', () => {
   assert.match(pnpmWorkspace, /^ {2}- '@deepseek-ai\/\*'$/m)
 })
 
-test('manifest declares the Node floor required by the tested project graph', () => {
-  assert.equal(root.engines.node, '>=24.0.0')
+test('manifest declares the Node floor required by jsdom 30', () => {
+  assert.equal(root.engines.node, '>=24.15.0')
 })
 
 test('manifest declares the native DSH package channel policy', () => {
