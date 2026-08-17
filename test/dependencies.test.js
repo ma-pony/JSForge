@@ -39,15 +39,11 @@ test('manifest declares the Node floor required by the tested project graph', ()
   assert.equal(root.engines.node, '>=24.0.0')
 })
 
-test('manifest declares the current public DSH packages', () => {
-  for (const dependency of [
-    '@deepseek-ai/dsh',
-    '@deepseek-ai/cordis',
-    '@deepseek-ai/dsh-tools',
-    '@deepseek-ai/schemastery',
-  ]) {
-    assert.equal(root.dependencies[dependency], 'latest')
-  }
+test('manifest declares the native DSH package channel policy', () => {
+  assert.equal(root.dependencies['@deepseek-ai/cordis'], 'latest')
+  assert.equal(root.dependencies['@deepseek-ai/dsh'], 'latest')
+  assert.equal(root.dependencies['@deepseek-ai/dsh-tools'], 'next')
+  assert.equal(root.dependencies['@deepseek-ai/schemastery'], 'latest')
 })
 
 test('manifest pins the package manager used by CI', () => {

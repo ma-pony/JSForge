@@ -57,7 +57,7 @@
   "dependencies": {
     "@deepseek-ai/cordis": "latest",
     "@deepseek-ai/dsh": "latest",
-    "@deepseek-ai/dsh-tools": "latest",
+    "@deepseek-ai/dsh-tools": "next",
     "@deepseek-ai/schemastery": "latest",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@opencode-ai/plugin": "1.18.16",
