@@ -44,9 +44,9 @@ set_breakpoint 后未暂停 →
 ```
 probe 反复出现新错误 →
   1. 用 analyze_runtime_trace 选择最高优先级分歧
-  2. 只采集 trace 已访问的属性，并修改 env.js 或 probe.js
+  2. 只采集 trace 已访问的属性，并更新 recipe.json
   3. 运行 verify；未通过时回到新的首次分歧
-  4. 禁止修改 target.js、动态源码或控制流
+  4. 保留 target.original.js；工作源码必须写 target.working.js 和 transforms.json
   5. 无法继续时记录准确阻塞点，保持任务未完成
 ```
 

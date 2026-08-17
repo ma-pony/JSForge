@@ -35,23 +35,26 @@
 | Browser Session | `[DataStore sessionId]` |
 | Script ID | `[当前会话精确 scriptId]` |
 | Script URL | `[填写]` |
-| Target SHA-256 | `[manifest.targetSha256]` |
-| Captured Environment SHA-256 | `[manifest.environmentSha256]` |
+| Original Target SHA-256 | `[manifest.originalTargetSha256]` |
+| Baseline SHA-256 | `[manifest.baselineSha256]` |
+| Session State SHA-256 | `[manifest.sessionStateSha256]` |
+| Property Facts SHA-256 | `[manifest.propertyFactsSha256]` |
+| Network Replay SHA-256 | `[manifest.networkReplaySha256]` |
 
 任一身份字段变化后，旧运行结果必须标记 Invalid，不得继续比较。
 
 ## Runtime Evidence
 
-| Run ID | Mode | Evidence Level | env.js SHA-256 | probe SHA-256 | runner SHA-256 | 结果 |
-|--------|------|----------------|-------------------|------------------|-------------------|------|
-| `[填写]` | `[probe / verify]` | `[Observed / Hypothesis / Verified / Invalid]` | `[result.envSha256]` | `[result.probeSha256]` | `[result.runnerSha256]` | `[填写]` |
+| Run ID | Mode | Evidence Level | Selected Target SHA-256 | Recipe SHA-256 | Probe SHA-256 | Runner SHA-256 | 结果 |
+|--------|------|----------------|------------------------|------------------|------------------|-------------------|------|
+| `[填写]` | `[probe / verify]` | `[Observed / Hypothesis / Verified / Invalid]` | `[result.selectedTargetSha256]` | `[result.recipeSha256]` | `[result.probeSha256]` | `[result.runnerSha256]` | `[填写]` |
 
 证据等级：
 
 - Observed：浏览器或 probe 直接观察。
 - Hypothesis：基于 probe 的待验证推断。
 - Verified：相同身份的 verify 多样本确认。
-- Invalid：target、session、script、env.js、probe 或 runner 身份不一致。
+- Invalid：原始/工作 target、session、script、Recipe、evidence、Probe 或 Runner 身份不一致。
 
 只有 Verified 结果可以写入 Proven Facts。
 

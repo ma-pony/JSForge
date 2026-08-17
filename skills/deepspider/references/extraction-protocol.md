@@ -47,7 +47,7 @@ const fixtures = [
 
 ### Step 2：Hook Local — 区分算法输入 vs 环境输入
 
-通过浏览器 Hook、断点或 `probe.js` 标记加密函数的入参来源，不修改 `target.js`：
+通过浏览器 Hook、断点或 Probe 标记加密函数的入参来源，不覆盖 `target.original.js`：
 
 ```javascript
 inject_hook({

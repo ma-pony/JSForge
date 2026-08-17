@@ -3,7 +3,7 @@
  * 浏览器启动时自动注入
  */
 
-import { HookBase } from '../env/HookBase.js';
+import { HookRuntime } from './probe/HookRuntime.js';
 import { getAllCollectorScripts } from './collectors/index.js';
 
 export const BROWSER_MODES = new Set(['none', 'observe', 'interactive', 'probe']);
@@ -14,7 +14,7 @@ export function getDefaultHookScript(mode = 'observe') {
   if (mode !== 'probe') return '';
 
   // Network evidence stays at the CDP layer; Probe does not replace XHR/fetch.
-  return HookBase.getBaseCode()
+  return HookRuntime.getBaseCode()
     + getCookieHook()
     + getJSONHooks()
     + getEncodingHooks()

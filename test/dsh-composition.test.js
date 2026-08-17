@@ -184,6 +184,26 @@ test('package patch mounts the Host plugin and selects the spider Preset', () =>
   ])
 })
 
+test('release surface contains only the active environment and Dialog architecture', () => {
+  const forbidden = [
+    'src/core/PatchGenerator.js',
+    'src/store/Store.js',
+    'src/browser/EnvBridge.js',
+    'src/env/modules',
+    'src/env/HookBase.js',
+    'src/browser/ui/selector.js',
+    'src/browser/ui/confirmDialog.js',
+    'src/browser/ui/panel.html',
+    'src/config/index.js',
+  ]
+  for (const relativePath of forbidden) {
+    assert.equal(fs.existsSync(path.join(projectRoot, relativePath)), false, relativePath)
+  }
+
+  assert.equal(fs.existsSync(path.join(projectRoot, 'src/browser/probe/HookRuntime.js')), true)
+  assert.equal(fs.existsSync(path.join(projectRoot, 'src/browser/ui/analysisPanel.js')), true)
+})
+
 test('real DSH loader consumes the materialized managed patch without losing Web services', () => {
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-dsh-composition-'))
   const dshPackage = JSON.parse(fs.readFileSync(dshPackageJsonPath, 'utf8'))

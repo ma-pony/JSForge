@@ -58,10 +58,12 @@ test('Agent prompt keeps the reverse-engineering invariants concise and complete
 
   assert.match(prompt, /generic reverse analysis/i)
   assert.match(prompt, /browser evidence/i)
-  assert.match(prompt, /immutable target/i)
-  assert.match(prompt, /Hook\/environment repair/i)
-  assert.match(prompt, /probe and conceal Node-environment differences/i)
-  assert.match(prompt, /request-level verification/i)
+  assert.match(prompt, /browser output alone is not completion/i)
+  assert.match(prompt, /offline request-level verification/i)
+  assert.match(prompt, /Environment Recipes/i)
+  assert.match(prompt, /fixed site rules/i)
+  assert.match(prompt, /recorded working-source transforms are allowed/i)
+  assert.doesNotMatch(prompt, /Keep an immutable target; use Hook\/environment repair instead of changing target code/i)
 })
 
 test('Agent plugin is stateless and adds no lifecycle or checkpoint surface', () => {

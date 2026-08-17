@@ -25,15 +25,14 @@ description: JS 逆向工程全流程技能 — 从请求追踪到 Python 爬虫
 
 ### Runtime 证据契约
 
-补环境阶段的目标脚本必须保持原始字节不变：
+补环境以当前 Session 的证据包和 Environment Recipe 为中心：
 
-**禁止直接修改目标脚本及其动态源码。**
-
-- 用当前会话的精确 `scriptId` 执行 `export_rebuild_bundle`，保存 sessionId、scriptId 和 Target SHA-256。
-- 禁止修改 `target.js`、eval 动态源码、chunk、常量池或控制流；派生格式化文件只能用于阅读。
-- 固定流程为：`export_rebuild_bundle` → `--mode probe` → `analyze_runtime_trace` → `collect_property` → 只修改 `env.js` / `probe.js` → `--mode verify`。
-- probe 输出只能是 Hypothesis；只有 hash 有效的 verify 结果才能进入 Proven Facts。
-- 不同 sessionId、scriptId 或 SHA-256 的结果禁止比较，必须标记 Invalid。
+- 用精确 `scriptId` 执行 `export_rebuild_bundle`，保存 sessionId、scriptId 和 `target.original.js` 的 SHA-256。
+- `target.original.js` 永远只读；确需格式化、去混淆或站点特定替换时写入 `target.working.js`，并用 `transforms.json` 记录完整输入、输出 hash 链。
+- `recipe.json` 是唯一环境策略入口，可组合 jsdom baseline、Session 事实、属性证据、固定值、隐藏、Hook、网络 replay 和断言。
+- 固定流程为：导出证据 → `--mode probe` → `analyze_runtime_trace` → 补采事实/更新 Recipe → `--mode verify` → 非浏览器请求验证。
+- Probe 输出只能是 Hypothesis；只有 hash 有效且不加载 Probe 的 verify 结果才能进入 Proven Facts。
+- 不同 sessionId、scriptId、原始目标 hash 或 Recipe hash 的结果禁止直接比较，必须标记 Invalid。
 
 ---
 

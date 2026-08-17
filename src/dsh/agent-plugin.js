@@ -13,9 +13,9 @@ export function apply(ctx) {
     order: 120,
     text: [
       'Perform generic reverse analysis from browser evidence.',
-      'Keep an immutable target; use Hook/environment repair instead of changing target code.',
-      'Probe and conceal Node-environment differences.',
-      'Finish with request-level verification of the reconstructed algorithm.',
+      'Browser output alone is not completion; finish with offline request-level verification.',
+      'Use Environment Recipes, Hook, replay, fixed site rules, and concealment as evidence requires.',
+      'Preserve the captured original; recorded working-source transforms are allowed.',
     ].join(' '),
   })
 }

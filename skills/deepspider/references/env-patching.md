@@ -1,114 +1,66 @@
-# 补环境：目标只读、环境可变
+# 补环境：证据驱动的 Environment Recipe
 
-## 核心原则
-
-补环境不是修复受保护 JavaScript，而是在目标源码字节不变的前提下，修复它观察到的宿主环境差异。
+补环境不是复制一份浏览器，也不是把所有差异都硬编码进底层。运行时由 jsdom 提供基础 DOM，`recipe.json` 只描述当前任务实际需要的差异。
 
 ```text
-原始 target
-→ --mode probe
-→ analyze_runtime_trace
-→ collect_property
-→ 只修改 env.js / probe.js
-→ --mode verify
+evidence/baseline.json
++ evidence/session-state.json
++ evidence/property-facts.json
++ evidence/network/responses.json
++ recipe.json
+→ jsdom Realm
 ```
 
-任何时候都禁止修改 target.js、动态 eval 源码、chunk、常量池或控制流。
+## 环境来源
 
-## 两种运行模式
+- baseline：稳定、通用的 Chrome 形状和常见 API。
+- Session evidence：当前页面 URL、标题、cookie、localStorage、sessionStorage 等运行状态。
+- property facts：由 `collect_property` 得到的值、brand、原型链、ownerDepth、descriptor 和函数源码外观。
+- replay：当前 Session 中精确 URL、method、body 命中的响应。
+- Recipe：按证据选择 fixed、hide、undefined、throw、replace、mask、hook、replay 等动作。
 
-### Probe
+当前 Patchright 页面是证据来源之一，不是绝对真值。遇到 Patchright 自身可检测特征时，可与普通 Chrome 样本或多个 Session 对照，再把确认后的规则写入 Recipe。
+
+## 标准循环
 
 ```bash
 node runner.mjs --mode probe
 ```
 
-Probe 使用 Hook、Proxy 和 inspector 观察环境访问。它可能改变目标可见状态，因此结果只能记录为 Observed 或 Hypothesis。
-
-### Verify
+1. 调用 `analyze_runtime_trace`，只处理最高优先级的首次分歧。
+2. 缺少事实时调用 `collect_property`，或补采网络响应。
+3. 更新 `recipe.json`；通用差异放 baseline，确定的站点规则可直接保留在任务 Recipe。
+4. 重新 Probe，确认执行路径推进。
+5. 使用无侵入探针的 Verify：
 
 ```bash
 node runner.mjs --mode verify
 ```
 
-Verify 不加载侵入式 probe。只有 target hash 有效且输出与浏览器同样本一致时，结果才能标记 Verified 并进入 Proven Facts。
+6. 最后用非浏览器客户端重放完整请求；浏览器内成功不算完成。
 
-## 允许修改的文件
+## 工作源码
 
-- `env.js`：最小浏览器环境实现。
-- `probe.js`：诊断 Hook 和日志。
-- `patches.json`：补丁证据与验证状态。
+`target.original.js` 保存捕获原文，禁止覆盖。格式化、去混淆或站点特定源码处理允许写入 `target.working.js`，但 `transforms.json` 必须形成从原始 hash 到工作 hash 的完整链。Runner 会拒绝未记录或被篡改的工作源码。
 
-禁止修改：
+动态 eval 源码保存到 `evidence/dynamic/<sha256>.js`，不得在原路径静默覆盖。
 
-- `target.js`
-- `dynamic/<sha256>.js`
-- manifest 中的 target/session/script 身份
-- dispatcher、opcode、循环和条件分支
+## 网络 replay
 
-## 环境补丁分类
+`evidence/network/responses.json` 只包含当前 Session 捕获的请求证据。fetch/XHR 按 URL、method 和 body 精确匹配；miss 会记录 `replay-miss` 并失败，不生成假的 200 响应。
 
-### Node 身份
+## 常见差异
 
-目标 realm 默认不应包含：
-
-```text
-process Buffer require module exports global __filename __dirname
-```
-
-出现 node-fingerprint 事件时，应从 realm 或 env 中移除身份，不得修改检测代码。
-
-### 值与状态
-
-Cookie、Storage、URL、语言、屏幕等值必须来自同一真实浏览器会话。禁止用空对象、固定字符串或猜测值补丁。
-
-### Brand、原型和描述符
-
-仅复制属性值通常不够。目标实际检查时，使用 `collect_property` 获取：
-
-- brand；
-- constructorName；
-- prototypeChain；
-- ownerDepth；
-- enumerable/configurable/writable；
-- getter/setter；
-- 函数源码外观。
-
-只修 trace 证明被访问的属性，不构建完整 DOM。
-
-### 时间与随机数
-
-Date、performance、Math.random 和 crypto 的差异必须先与浏览器样本对照。Probe 中固定时间或随机数只能用于定位，不能直接作为最终实现。
-
-## Hook 要求
-
-- Hook 只能放在 probe.js 或环境边界。
-- 禁止向目标源码插入日志。
-- 禁止替换 eval 输入字符串。
-- 动态脚本通过 inspector 旁路保存原始源码。
-- Hook 必须尽量保持 name、length、descriptor 和 Function.prototype.toString 外观。
-- Probe Hook 的透明性必须由无 probe 的 verify 再确认。
-
-## 每轮补丁记录
-
-patches.json 中每项至少包含：
-
-```json
-{
-  "path": "navigator.plugins",
-  "probeRunId": "...",
-  "browserEvidence": "collect_property result",
-  "reason": "brand mismatch",
-  "verified": false
-}
-```
-
-Verify 通过后才能把 verified 改为 true。
+- Node 身份：隐藏 `process`、`Buffer`、`require`、`module`、`global` 等宿主特征。
+- jsdom 内部特征：确认属性名和访问路径后，用 hide/mask 规则处理；无需为了形式上的“通用”拒绝确定有效的规则。
+- brand/descriptor：优先使用浏览器事实恢复原型、owner 和 getter/setter 形状。
+- 时间与随机数：先对照样本；固定值可用于定位，最终 Recipe 必须能解释验证样本。
+- API 行为：优先 replay 或小型 handler，不实现完整浏览器子系统。
 
 ## 停止条件
 
-- target hash 不一致：停止并恢复原始样本。
-- sessionId 或 scriptId 不一致：停止比较，重新导出。
-- probe 成功、verify 失败：标记 Probe Interference。
-- 超时或死循环：检查之前的环境访问，不跳过控制流。
-- 没有浏览器证据：保持 Hypothesis，不添加补丁。
+- `target.original.js` hash、Session 或 scriptId 不一致；
+- `target.working.js` 没有完整 transforms hash 链；
+- Probe 成功但 Verify 失败；
+- replay miss 或证据来自另一个 Session；
+- 没有完成离线请求级验证。

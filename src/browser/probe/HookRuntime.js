@@ -3,7 +3,7 @@
  * 统一的 Hook 反检测 + 日志管理
  */
 
-export class HookBase {
+export class HookRuntime {
   /**
    * 获取 Hook 基础代码
    * 包含：反检测、统一日志管理
@@ -641,4 +641,4 @@ ${overrideStr ? '\n  // 配置覆盖\n' + overrideStr + '\n' : ''}
   }
 }
 
-export default HookBase;
+export default HookRuntime;

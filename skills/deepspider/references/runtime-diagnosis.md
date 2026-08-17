@@ -1,123 +1,64 @@
-# Runtime 阶段：不可变样本诊断
+# Runtime 阶段：找到首次环境分歧
 
-> 阶段目标：让原始浏览器脚本在不暴露 Node 身份的本地 realm 中运行，找到浏览器与本地环境的首次分歧，并建立有浏览器证据的最小环境补丁。
+Runtime 阶段的目标是让捕获脚本在隔离的 jsdom Realm 中运行，并把浏览器与本地环境的首次行为分歧转成可验证的 `recipe.json` 规则。
 
-## 不可违反的边界
+## 1. 导出精确证据包
 
-- `target.js`、动态 chunk、常量池和控制流禁止修改。
-- 只能修改 `env.js` 和 `probe.js`。
-- 格式化、AST 去混淆和变量重命名必须写入独立派生文件，只能用于阅读。
-- probe 输出不能写入 Proven Facts。
-- 不同 sessionId、scriptId 或 Target SHA-256 的结果禁止比较。
-- 异常、超时和死循环不能通过跳过分支或 opcode 处理。
-
-## First Divergence
-
-First Divergence 不是第一个报错或死循环，而是原始脚本第一次读取到与真实浏览器不同的环境事实，或第一次因完整性、brand、descriptor、时间和随机数差异进入不同分支。
-
-固定优先级：
-
-```text
-target integrity
-→ Node identity
-→ source integrity
-→ brand / descriptor
-→ missing environment
-→ timing / randomness
-→ runtime exception
-→ runtime timeout
-```
-
-## 标准流程
-
-### 1. 导出精确样本
-
-先调用 `list_scripts`，选择当前捕获会话中的精确 scriptId：
+先用 `list_scripts` 选择当前 Session 的 scriptId，再调用：
 
 ```text
 export_rebuild_bundle({
-  taskId: "target-20260814-01",
+  taskId: "target-20260817-01",
   scriptId: "<current script id>",
   callExpression: "window.generate(input)"
 })
 ```
 
-记录 manifest 中的 sessionId、scriptId、scriptUrl、Target SHA-256 和 environment SHA-256。
+必须记录 manifest 的 sessionId、scriptId、`target.original.js` SHA-256、Recipe SHA-256 和各 evidence hash。`evidence/network/responses.json` 保存可用于 fetch/XHR 的精确重放样本。
 
-### 2. Probe 模式
+## 2. Probe
 
 ```bash
 node runner.mjs --mode probe
 ```
 
-Probe 会观察：
-
-- process、Buffer、require、module、global 等 Node 身份刺探；
-- Function.prototype.toString、descriptor、ownKeys、prototype、brand；
-- navigator、document、location、storage 等环境读取；
-- Date、performance、Math.random、crypto；
-- 动态编译脚本的原始 hash 和源码。
-
-运行后调用：
+然后调用：
 
 ```text
 analyze_runtime_trace({ taskId, runId })
 ```
 
-每次只处理工具返回的最高优先级问题。
+Probe 用于发现 Node identity、runtime artifact、source integrity、brand/descriptor、缺失属性、值差异、replay miss、异常和超时。相同 category、operation、path、caller 会聚合计数，不应靠海量重复日志判断。
 
-### 3. 采集浏览器事实
+## 3. 取证并更新 Recipe
 
-根据 trace 中的精确属性路径调用 `collect_property`。必须记录：
+对工具返回的最高优先级差异：
 
-- 值和类型；
-- brand 和 constructorName；
-- prototypeChain 和 ownerDepth；
-- descriptor；
-- 函数源码外观。
+1. 用 `collect_property` 采集主 frame 或 iframe 的完整属性事实；
+2. 必要时重新触发请求，补齐 `evidence/network/responses.json`；
+3. 在 `recipe.json` 中增加最小规则；
+4. 可确认的 jsdom 属性名隐藏、固定值或站点规则允许直接使用，但要保留来源和验证结果；
+5. 重新 Probe，继续到下一个首次分歧。
 
-没有浏览器证据时不得猜测补丁值。
+当前 Patchright Session 可能带有自动化特征。对敏感指纹应使用普通 Chrome 或多 Session 交叉样本，而不是把当前页面值无条件当作真值。
 
-### 4. 修改环境
+## 4. 工作源码规则
 
-只修改 `env.js` 或 `probe.js`，并在 patches.json 中记录：
+`target.original.js` 是只读证据。源码格式化、去混淆和必要的站点特定处理写入 `target.working.js`，同时更新 `transforms.json` 的输入/输出 SHA-256 链。Runner 只执行通过完整链验证的工作源码。
 
-- 属性路径；
-- 对应 probe run；
-- 浏览器采集事实；
-- 修改原因；
-- verify 状态。
+不得覆盖原始证据或修改 `evidence/dynamic/<sha256>.js`。未记录的 working source 会被拒绝。
 
-修改后重新运行 probe。行为继续推进只能说明 Hypothesis 得到支持，仍不能升级为 Proven Fact。
-
-### 5. Verify 模式
+## 5. Verify
 
 ```bash
 node runner.mjs --mode verify
 ```
 
-Verify 不加载侵入式探针。满足以下条件时结果才能进入 Proven Facts：
+Verify 不加载 Probe。只有以下条件同时成立，结果才能进入 Proven Facts：
 
-- target hash 与 manifest 一致；
-- 所有环境补丁都有真实浏览器来源；
-- 至少三组输入与同一浏览器样本结果一致；
-- 没有 patched target、patched chunk 或控制流绕过。
+- 原始目标、working transforms、Recipe 和 evidence hash 全部有效；
+- replay 没有未解释的 miss；
+- 多组输入与浏览器对照结果一致；
+- 最终非浏览器请求得到预期业务响应。
 
-## 结果解释
-
-| 现象 | 结论 | 下一步 |
-|------|------|--------|
-| probe 成功、verify 失败 | Probe Interference | 检查 Hook/Proxy 改变的可观察行为 |
-| Node identity 事件 | realm 暴露了 Node 特征 | 从 realm/env 移除，不改 target |
-| source-integrity 事件 | 目标检查函数源码或描述符 | 减少探针影响或修正环境伪装 |
-| brand-mismatch | 对象结构不符合浏览器事实 | 按 collect_property 修正原型/descriptor |
-| environment-missing | 目标读取未实现属性 | 采集真实值后最小补 env.js |
-| runtime-timeout | 进入异常执行路径 | 检查超时前最后环境读取，不跳循环 |
-
-## 完成门
-
-- Challenge Identity 已写入 session-state。
-- probe 与 verify 使用不同 runId。
-- Target SHA-256 在所有运行中一致。
-- verify 多样本输出与浏览器一致。
-- 最终非浏览器 HTTP 请求得到预期业务响应。
+Browser output alone is not completion. Probe 通过、页面内 fetch 成功或 DOM 能取到数据，都不能代替 offline request-level verification。

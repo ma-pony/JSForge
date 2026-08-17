@@ -96,24 +96,16 @@ context.startRendering().then(buffer => {
 
 ---
 
-## collect_env 覆盖率检查
+## collect_env 与属性事实
 
-DeepSpider 的 `collect_env` 已自动采集大部分属性。确认覆盖范围：
+`collect_env` 采集当前页面状态；它不是完整浏览器指纹，也不自动证明 Patchright 值是真实客户端基线：
 
 ```javascript
 // 在真实浏览器中执行完整采集
 collect_env()
 ```
 
-`collect_env` 输出的 `env.json` 包含：
-- `navigator.*` — 全部标准属性
-- `screen.*` — 全部屏幕属性
-- `window.*` — 顶层属性
-- Canvas 2D 指纹（像素哈希）
-- WebGL 参数
-- `Date.getTimezoneOffset()`
-
-**通常缺少的属性**（按 trace 路径使用 `collect_property` 补充）：
+按 trace 路径使用 `collect_property` 补充值、brand、原型链、descriptor 和函数源码外观：
 
 ```javascript
 collect_property({ path: 'navigator.plugins', depth: 3 })
@@ -126,7 +118,7 @@ collect_property({ path: 'screen.height' })
 
 ## 补环境拟合策略
 
-目标源码、动态源码、常量池和控制流必须保持原始字节不变。环境值从真实浏览器采集，修复仅写入 `env.js` 或 `probe.js`。
+保留 `target.original.js` 和动态证据。环境差异写入 `recipe.json`；确需站点特定源码处理时写 `target.working.js` 和 `transforms.json`，不得覆盖原文。
 
 ```text
 list_scripts
@@ -134,11 +126,11 @@ list_scripts
 → node runner.mjs --mode probe
 → analyze_runtime_trace({ taskId, runId })
 → collect_property({ path })
-→ 修改 env.js / probe.js
+→ 更新 recipe.json
 → node runner.mjs --mode verify
 ```
 
-`probe` 用于形成假设，不能作为验证通过依据。只有 sessionId、scriptId、target、env.js 和 runner 哈希一致的 `verify` 结果才能进入 Proven Facts。
+`probe` 用于形成假设，不能作为验证通过依据。只有 sessionId、scriptId、原始/工作目标、Recipe、evidence 和 runner 哈希一致的 `verify` 结果才能进入 Proven Facts。
 
 ---
 

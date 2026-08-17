@@ -174,13 +174,13 @@
 
 ---
 
-### AP-RT4：Target-mutation（修改目标样本）
+### AP-RT4：Unrecorded-target-mutation（无记录修改目标）
 
-**描述**：向 target.js 或动态 chunk 插入日志、替换字符串、删除检测代码后继续执行，并把结果当成原始行为。
+**描述**：覆盖 `target.original.js` 或动态证据，或直接创建工作源码却不记录变换 hash 链。
 
-**正确做法**：目标源码只读；使用 probe.js、CDP 断点或 inspector 旁路观察，运行前校验 Target SHA-256。
+**正确做法**：原始证据只读；诊断用 Probe、CDP 断点或 inspector。确需格式化、去混淆、固定替换时写 `target.working.js`，并在 `transforms.json` 记录输入和输出 SHA-256。
 
-**检测信号**：出现 `chunk_patched.js`、`target_patched.js`，或对目标源码调用 `.replace()`。
+**检测信号**：原始 hash 改变，或 Runner 发现 working source 没有完整 transforms 链。
 
 ---
 

@@ -1,14 +1,18 @@
 # 验证记录
 
-## Immutable Runtime Identity
+## Runtime Identity
 
 | 字段 | 值 |
 |------|---|
 | Browser Session | `[填写]` |
 | Script ID | `[填写]` |
-| Target SHA-256 | `[填写]` |
-| Captured Environment SHA-256 | `[填写]` |
-| env.js SHA-256 | `[填写 result.envSha256]` |
+| Original Target SHA-256 | `[填写 result.originalTargetSha256]` |
+| Selected Target SHA-256 | `[填写 result.selectedTargetSha256]` |
+| Recipe SHA-256 | `[填写 result.recipeSha256]` |
+| Baseline SHA-256 | `[填写 result.baselineSha256]` |
+| Session State SHA-256 | `[填写 result.sessionStateSha256]` |
+| Property Facts SHA-256 | `[填写 result.propertyFactsSha256]` |
+| Network Replay SHA-256 | `[填写 result.networkReplaySha256]` |
 | runner SHA-256 | `[填写 result.runnerSha256]` |
 | Verify Run ID | `[填写]` |
 

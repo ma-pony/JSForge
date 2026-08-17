@@ -134,7 +134,7 @@ list_scripts
 → node runner.mjs --mode verify
 ```
 
-6. verify 通过后再进入 extraction，生成独立调用层；bundle 内的 target.js 和动态源码始终不改
+6. verify 通过后再进入 extraction，生成独立调用层；保留 `target.original.js`，需要的工作源码变换写入 `target.working.js` 和 `transforms.json`
 
 ---
 
@@ -172,7 +172,7 @@ list_scripts
 
 ## Python 调用 Node.js 的 Bridge
 
-需要 Node Bridge 时，先用 bundle 的 verify 模式完成多样本验证。随后在 extraction 目录创建独立调用层，通过 stdin/stdout 接收输入；调用层引用已验证算法合约，不覆盖 rebuild 目录，也不修改 `target.js`、动态源码、常量池或控制流。
+需要 Node Bridge 时，先用 bundle 的 verify 模式完成多样本验证。随后在 extraction 目录创建独立调用层，通过 stdin/stdout 接收输入；调用层引用已验证算法合约，不覆盖 rebuild 证据目录。
 
 ---
 
