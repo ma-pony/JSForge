@@ -3,20 +3,16 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { setImmediate } from 'node:timers/promises'
 
-import { renderToolsSdk } from '@deepseek-ai/dsh-tools'
-
-import { deepSpiderCatalog } from '../../../src/tools/index.js'
-
 export const name = 'deepspider-test-host-probe'
 export const inject = [
   'agents',
   'agentPresets',
   'tools',
+  'systemPrompt',
   'commands',
   'deepSpiderRuntimeManager',
 ]
 
-const DEEPSPIDER_NAMES = deepSpiderCatalog.map(({ name }) => name)
 const ENABLED_TOOLS = [
   'get_goal',
   'create_goal',
@@ -72,6 +68,17 @@ async function waitFor(predicate, signal, description) {
   const deadline = Date.now() + 30000
   while (!predicate()) {
     throwIfAborted(signal)
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${description}`)
+    await setImmediate()
+  }
+}
+
+async function waitForValue(producer, predicate, signal, description) {
+  const deadline = Date.now() + 30000
+  while (true) {
+    throwIfAborted(signal)
+    const value = await producer()
+    if (predicate(value)) return value
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${description}`)
     await setImmediate()
   }
@@ -139,25 +146,14 @@ async function resumeSpiderAgent(ctx, sessionId, signal) {
   })
 }
 
-function registryReport(ctx, agent) {
-  const definitions = DEEPSPIDER_NAMES.map((toolName) => ctx.tools.get(toolName, agent))
-  const nativeCount = definitions.filter(Boolean).length
-  const sdk = renderToolsSdk(definitions.filter(Boolean).map((definition) => ({
-    name: definition.name,
-    description: definition.description,
-    parameters: definition.parameters,
-    output: definition.output.schema,
-  })))
-  const sdkNames = DEEPSPIDER_NAMES.filter((toolName) => (
-    sdk.includes(`\n  ${toolName}:`)
-  ))
+async function registryReport(ctx, agent) {
+  const assembly = await ctx.systemPrompt.assemble({ agent, scope: agent })
+  const sdkSection = assembly.sections.find(({ name }) => name === 'tools:sdk')
 
   return {
-    nativeCount,
-    nativeNames: definitions.filter(Boolean).map(({ name }) => name),
-    runCodePresent: ctx.tools.get('run_code', agent)?.name === 'run_code',
-    sdkCount: sdkNames.length,
-    sdkNames,
+    modelToolNames: assembly.tools.map(({ name }) => name),
+    assembledSectionNames: assembly.sections.map(({ name }) => name),
+    sdkSectionText: sdkSection?.text,
     enabled: Object.fromEntries(ENABLED_TOOLS.map((toolName) => [
       toolName,
       Boolean(ctx.tools.get(toolName, agent)),
@@ -184,6 +180,41 @@ async function runCode(ctx, agent, description, code, signal) {
   const result = await execute(ctx, agent, 'run_code', { description, code }, signal)
   if (result.isError) throw new Error(result.error.message)
   return result.value.result
+}
+
+async function exportNativeRebuild(ctx, agent, target, session, taskId, signal) {
+  const scriptUrl = new URL(`/native-artifact.js?session=${session}`, target).href
+  const scripts = await waitForValue(
+    () => runCode(
+      ctx,
+      agent,
+      `List captured scripts for Session ${session}`,
+      'return await tools.list_scripts({})',
+      signal,
+    ),
+    (entries) => entries.some(({ url }) => url === scriptUrl),
+    signal,
+    `Session ${session} script capture`,
+  )
+  const script = scripts.find(({ url }) => url === scriptUrl)
+  const artifact = await runCode(
+    ctx,
+    agent,
+    `Export the native rebuild bundle for Session ${session}`,
+    `return await tools.export_rebuild_bundle(${JSON.stringify({
+      taskId,
+      scriptId: script.id,
+    })})`,
+    signal,
+  )
+  return {
+    ...artifact,
+    capturedScript: {
+      id: script.id,
+      url: script.url,
+      sessionId: script.sessionId,
+    },
+  }
 }
 
 async function concurrencyReport(manager, firstAgent, secondAgent) {
@@ -241,7 +272,7 @@ async function runSmoke(ctx, own, signal) {
     cwd,
     signal,
   ))
-  const registry = registryReport(ctx, handleA.agent)
+  const registry = await registryReport(ctx, handleA.agent)
   const target = process.env.DEEPSPIDER_TEST_TARGET_URL
   const navigation = await runCode(
     ctx,
@@ -290,7 +321,7 @@ async function runMultisession(ctx, own, release, signal) {
   const identify = identityTracker()
   let handleA = own(await createSpiderAgent(ctx, sessionA, cwd, signal))
   const handleB = own(await createSpiderAgent(ctx, sessionB, cwd, signal))
-  const registry = registryReport(ctx, handleA.agent)
+  const registry = await registryReport(ctx, handleA.agent)
 
   const [navigationA, navigationB] = await Promise.all([
     runCode(
@@ -312,10 +343,10 @@ async function runMultisession(ctx, own, release, signal) {
   const manager = ctx.deepSpiderRuntimeManager
   const runtimeA = await manager.get(handleA.agent, { signal })
   const runtimeB = await manager.get(handleB.agent, { signal })
-  runtimeA.selectedTarget = { sessionId: sessionA }
-  runtimeB.selectedTarget = { sessionId: sessionB }
-  runtimeA.rebuildContext = { sessionId: sessionA }
-  runtimeB.rebuildContext = { sessionId: sessionB }
+  const rebuildArtifacts = await Promise.all([
+    exportNativeRebuild(ctx, handleA.agent, target, 'A', 'native-session-a', signal),
+    exportNativeRebuild(ctx, handleB.agent, target, 'B', 'native-session-b', signal),
+  ])
   const oldRuntimeId = identify(runtimeA)
   const oldBrowserId = identify(runtimeA.browserClient)
   const oldDataStoreId = identify(runtimeA.dataStore)
@@ -337,8 +368,7 @@ async function runMultisession(ctx, own, release, signal) {
       dataRoots: [runtimeA.dataStore.root, runtimeB.dataStore.root],
       browserDataRoots: [runtimeA.paths.browserData, runtimeB.paths.browserData],
       rebuildRoots: [runtimeA.paths.rebuild, runtimeB.paths.rebuild],
-      selectedTargets: [runtimeA.selectedTarget, runtimeB.selectedTarget],
-      rebuildState: [runtimeA.rebuildContext, runtimeB.rebuildContext],
+      rebuildArtifacts,
     },
   })
 
@@ -355,9 +385,6 @@ async function runMultisession(ctx, own, release, signal) {
   )
 
   handleA = own(await resumeSpiderAgent(ctx, sessionA, signal))
-  const resumedRuntimeBeforeNavigation = await manager.get(handleA.agent, { signal })
-  const resumedSelectedTargetBeforeNavigation = resumedRuntimeBeforeNavigation.selectedTarget
-  const resumedRebuildContextBeforeNavigation = resumedRuntimeBeforeNavigation.rebuildContext
   const resumedNavigation = await runCode(
     ctx,
     handleA.agent,
@@ -383,8 +410,6 @@ async function runMultisession(ctx, own, release, signal) {
       oldRoot: runtimeA.paths.root,
       newRoot: resumedRuntimeA.paths.root,
       browserDataRoot: resumedRuntimeA.paths.browserData,
-      selectedTargetBeforeNavigation: resumedSelectedTargetBeforeNavigation,
-      rebuildContextBeforeNavigation: resumedRebuildContextBeforeNavigation,
     },
   })
 }

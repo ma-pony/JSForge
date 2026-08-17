@@ -62,9 +62,7 @@ test('two real DSH Sessions isolate browser state, dispose exactly, and shut Chr
 
     assert.deepEqual(navigated.agents.map(({ id }) => id), sessionIds)
     assert.deepEqual(navigated.agents.map(({ preset }) => preset), ['spider', 'spider'])
-    assert.equal(navigated.registry.nativeCount, 51)
-    assert.equal(navigated.registry.runCodePresent, true)
-    assert.equal(navigated.registry.sdkCount, 51)
+    assert.deepEqual(navigated.registry.modelToolNames, ['run_code'])
     assert.match(navigated.navigation.a.url, /session=A$/)
     assert.match(navigated.navigation.b.url, /session=B$/)
     assert.equal(navigated.concurrency.sameSessionSerialized, true)
@@ -76,14 +74,7 @@ test('two real DSH Sessions isolate browser state, dispose exactly, and shut Chr
     assertDistinctPair(navigated.isolation.dataRoots, 'DataStore root')
     assertDistinctPair(navigated.isolation.browserDataRoots, 'browser-data root')
     assertDistinctPair(navigated.isolation.rebuildRoots, 'rebuild root')
-    assert.deepEqual(
-      navigated.isolation.selectedTargets.map(({ sessionId }) => sessionId),
-      sessionIds,
-    )
-    assert.deepEqual(
-      navigated.isolation.rebuildState.map(({ sessionId }) => sessionId),
-      sessionIds,
-    )
+    assertRebuildArtifacts(navigated.isolation)
 
     const firstSnapshot = descendantProcesses(child.pid)
     const firstChromium = firstSnapshot.filter(isChromium)
@@ -106,8 +97,6 @@ test('two real DSH Sessions isolate browser state, dispose exactly, and shut Chr
     assert.notEqual(complete.resume.oldDataStoreId, complete.resume.newDataStoreId)
     assert.equal(complete.resume.oldRoot, complete.resume.newRoot)
     assert.equal(complete.resume.browserDataRoot, navigated.isolation.browserDataRoots[0])
-    assert.equal(complete.resume.selectedTargetBeforeNavigation, null)
-    assert.equal(complete.resume.rebuildContextBeforeNavigation, null)
     assert.match(complete.navigation.survivingB.url, /session=B$/)
     assert.match(complete.navigation.resumedA.url, /session=A-resumed$/)
 
@@ -127,15 +116,26 @@ test('two real DSH Sessions isolate browser state, dispose exactly, and shut Chr
 
     const shutdownChromiumPids = resumedChromium.map(({ pid }) => pid)
     assert.ok(shutdownChromiumPids.length > 0)
-    child.kill('SIGTERM')
+    const hostDisposal = waitForCheckpointBeforeExit(
+      output,
+      'host-disposed',
+      child,
+      shutdownChromiumPids,
+      processOutput,
+      30000,
+    )
+    assert.equal(child.kill('SIGTERM'), true)
+    const disposed = await hostDisposal
+    assert.deepEqual(disposed.remainingRuntimeIds, [])
+    await waitForPidsGoneBeforeExit(
+      child,
+      shutdownChromiumPids,
+      processOutput,
+      30000,
+    )
     const exit = await waitForExit(child, 30000)
     assert.equal(exit.code, 143, processOutput.text())
     assert.equal(exit.signal, null, processOutput.text())
-    await waitForCondition(
-      () => shutdownChromiumPids.every((pid) => !pidExists(pid)),
-      30000,
-      `shutdown Chromium PIDs to exit: ${shutdownChromiumPids.join(', ')}`,
-    )
   } finally {
     await stopChild(child)
     await target.close()
@@ -148,10 +148,54 @@ function assertDistinctPair(values, label) {
   assert.notEqual(values[0], values[1], label)
 }
 
+function assertRebuildArtifacts(isolation) {
+  const { rebuildArtifacts, rebuildRoots } = isolation
+  assert.equal(rebuildArtifacts.length, 2)
+  assert.notEqual(path.basename(rebuildArtifacts[0].taskDir), path.basename(rebuildArtifacts[1].taskDir))
+  assertDistinctPair(
+    rebuildArtifacts.map(({ manifest }) => manifest.sessionId),
+    'captured DataStore session',
+  )
+
+  for (const [index, artifact] of rebuildArtifacts.entries()) {
+    const otherIndex = index === 0 ? 1 : 0
+    assert.equal(artifact.success, true)
+    assert.equal(path.dirname(artifact.taskDir), rebuildRoots[index])
+    assert.equal(artifact.manifest.sessionId, artifact.capturedScript.sessionId)
+    assert.equal(artifact.manifest.scriptId, artifact.capturedScript.id)
+    assert.equal(artifact.manifest.scriptUrl, artifact.capturedScript.url)
+    assert.match(artifact.manifest.scriptUrl, new RegExp(`session=${index === 0 ? 'A' : 'B'}$`))
+    assert.equal(fs.existsSync(path.join(artifact.taskDir, 'manifest.json')), true)
+    assert.match(
+      fs.readFileSync(path.join(artifact.taskDir, 'target.js'), 'utf8'),
+      new RegExp(`native-session-${index === 0 ? 'A' : 'B'}`),
+    )
+    assert.equal(
+      fs.existsSync(path.join(rebuildRoots[otherIndex], path.basename(artifact.taskDir))),
+      false,
+      `Session ${index} rebuild artifact crossed into Session ${otherIndex}`,
+    )
+  }
+}
+
 async function startTargetServer() {
   const server = http.createServer((request, response) => {
+    const url = new URL(request.url, 'http://127.0.0.1')
+    const session = url.searchParams.get('session') || 'unknown'
+    if (url.pathname === '/native-artifact.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
+      response.end([
+        `globalThis.__nativeAcceptance = ${JSON.stringify(`native-session-${session}`)};`,
+        `document.documentElement.dataset.nativeSession = ${JSON.stringify(session)};`,
+      ].join('\n'))
+      return
+    }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><title>DSH Native Acceptance</title><p>${request.url}</p>`)
+    response.end([
+      '<!doctype html><title>DSH Native Acceptance</title>',
+      `<p>${request.url}</p>`,
+      `<script src="/native-artifact.js?session=${encodeURIComponent(session)}"></script>`,
+    ].join(''))
   })
   await new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -235,6 +279,97 @@ function waitForCheckpoint(file, phase, timeout) {
       () => finish(reject, new Error(`timed out waiting for probe checkpoint ${phase}`)),
       timeout,
     )
+    inspect()
+  })
+}
+
+function waitForCheckpointBeforeExit(file, phase, child, pids, output, timeout) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const readCheckpoint = () => {
+      const rows = fs.readFileSync(file, 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+      const failure = rows.find((row) => row.phase === 'error')
+      if (failure) return { failure }
+      return { found: rows.find((row) => row.phase === phase) }
+    }
+    const inspect = () => {
+      const { failure, found } = readCheckpoint()
+      if (failure) return finish(reject, new Error(failure.error))
+      if (found) finish(resolve, found)
+    }
+    const onExit = (code, signal) => {
+      const { failure, found } = readCheckpoint()
+      if (failure) return finish(reject, new Error(failure.error))
+      const alive = pids.filter(pidExists)
+      if (found && alive.length === 0) return finish(resolve, found)
+      finish(reject, new Error([
+        `DSH CLI exited (${code ?? signal}) before ${phase} completed`,
+        `checkpoint seen: ${Boolean(found)}`,
+        `Chromium PIDs still alive: ${alive.join(', ') || 'none'}`,
+        output.text(),
+      ].join('\n')))
+    }
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      watcher.close()
+      child.removeListener('exit', onExit)
+      callback(value)
+    }
+    const watcher = fs.watch(file, inspect)
+    const timer = setTimeout(
+      () => finish(reject, new Error(`timed out waiting for ${phase} before CLI exit`)),
+      timeout,
+    )
+    child.once('exit', onExit)
+    if (child.exitCode !== null || child.signalCode !== null) {
+      onExit(child.exitCode, child.signalCode)
+      return
+    }
+    inspect()
+  })
+}
+
+function waitForPidsGoneBeforeExit(child, pids, output, timeout) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let poll
+    const inspect = () => {
+      const alive = pids.filter(pidExists)
+      if (alive.length === 0) return finish(resolve)
+      poll = setTimeout(inspect, 25)
+    }
+    const onExit = (code, signal) => {
+      const alive = pids.filter(pidExists)
+      if (alive.length === 0) return finish(resolve)
+      finish(reject, new Error([
+        `DSH CLI exited (${code ?? signal}) while Chromium was still alive`,
+        `Chromium PIDs still alive: ${alive.join(', ')}`,
+        output.text(),
+      ].join('\n')))
+    }
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      clearTimeout(poll)
+      child.removeListener('exit', onExit)
+      callback(value)
+    }
+    const timer = setTimeout(() => finish(
+      reject,
+      new Error(`timed out waiting for Chromium PIDs to exit: ${pids.join(', ')}`),
+    ), timeout)
+    child.once('exit', onExit)
+    if (child.exitCode !== null || child.signalCode !== null) {
+      onExit(child.exitCode, child.signalCode)
+      return
+    }
     inspect()
   })
 }

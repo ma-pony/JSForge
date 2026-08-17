@@ -11,9 +11,12 @@ import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'patchright'
 
+import { deepSpiderCatalog } from '../../src/tools/index.js'
+
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const PROBE_PLUGIN = fileURLToPath(new URL('../fixtures/dsh/host-probe-plugin.js', import.meta.url))
 const PATCHRIGHT_BROWSER_CACHE = findBrowserCache(chromium.executablePath())
+const DEEPSPIDER_NAMES = deepSpiderCatalog.map(({ name }) => name)
 const ENABLED_TOOLS = [
   'get_goal',
   'create_goal',
@@ -80,11 +83,15 @@ test('real DSH Web boots the Spider Preset with native Code Mode capabilities', 
     assert.deepEqual(ready.agents.map(({ id }) => id), sessionIds)
     assert.deepEqual(ready.agents.map(({ preset }) => preset), ['spider', 'spider'])
     assert.deepEqual(ready.rootAgentIds.sort(), [...sessionIds].sort())
-    assert.equal(ready.registry.nativeCount, 51)
-    assert.equal(new Set(ready.registry.nativeNames).size, 51)
-    assert.equal(ready.registry.runCodePresent, true)
-    assert.equal(ready.registry.sdkCount, 51)
-    assert.equal(new Set(ready.registry.sdkNames).size, 51)
+    assert.equal(DEEPSPIDER_NAMES.length, 51)
+    assert.equal(new Set(DEEPSPIDER_NAMES).size, 51)
+    assert.deepEqual(ready.registry.modelToolNames, ['run_code'])
+    assert.equal(ready.registry.assembledSectionNames.includes('tools:sdk'), true)
+    assert.equal(typeof ready.registry.sdkSectionText, 'string')
+    const assembledDeepSpiderNames = DEEPSPIDER_NAMES.filter((name) => (
+      new RegExp(`(^|\\W)${name}(?=\\W|$)`).test(ready.registry.sdkSectionText)
+    ))
+    assert.deepEqual(assembledDeepSpiderNames, DEEPSPIDER_NAMES)
     assert.match(ready.navigation.url, /\/smoke$/)
     assert.equal(ready.cordisInspectProviderIds.includes('Service'), true)
     assert.equal(ready.cordisInspectProviderIds.includes('Tool'), true)

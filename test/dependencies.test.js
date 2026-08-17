@@ -67,6 +67,15 @@ test('published package includes the bilingual project readme', () => {
   assert.equal(root.files.includes('plugins/'), false)
 })
 
+test('published package allowlist excludes the native DSH acceptance fixture', () => {
+  const fixture = 'test/fixtures/dsh/host-probe-plugin.js'
+  const included = root.files.some((entry) => {
+    const allowedPath = entry.replace(/\/$/, '')
+    return fixture === allowedPath || fixture.startsWith(`${allowedPath}/`)
+  })
+  assert.equal(included, false)
+})
+
 test('publish job provisions Patchright after the frozen release gates and before integration', () => {
   const workflow = loadWorkflow('publish.yml')
   const testRuns = workflow.jobs.test.steps
