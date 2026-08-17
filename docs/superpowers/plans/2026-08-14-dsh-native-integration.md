@@ -2,406 +2,132 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace OpenCode with DeepSeek Harness as DeepSpider's native Agent runtime, while supporting isolated concurrent browser sessions and retaining MCP only as an external adapter.
+**Goal:** Finish replacing OpenCode with DeepSeek Harness (DSH), expose all 51 DeepSpider reverse-engineering tools through native Code Mode and MCP, and keep every DSH Session's browser, evidence, and artifacts isolated.
 
-**Architecture:** DSH owns the Host and Agent planes. A process-wide `RuntimeManager` maps each exact DSH Agent/Session ID to one isolated `DeepSpiderRuntime`; both the native DSH adapter and the external MCP adapter dispatch through one framework-neutral Tool Catalog. Session state is restored from a typed DSH checkpoint projection, while large evidence stays in session-owned hashed directories.
+**Architecture:** DSH owns the product-facing Host and Agent planes: Web UI, models, credentials, Sessions, Goals, standard tools, persistence, and compaction. DeepSpider contributes one process-wide `RuntimeManager`; each exact `agent.id` owns one lazy `DeepSpiderRuntime`, Patchright browser, DataStore, and hashed artifact root. One immutable Tool Catalog feeds both a native DSH adapter and the external MCP adapter.
 
-**Tech Stack:** Node.js `>=24.0.0`, ESM, DeepSeek Harness/Cordis public plugin APIs, `@deepseek-ai/dsh-tools`, Schemastery, Patchright, MCP SDK, Zod 4, `node:test`, pnpm.
+**Tech Stack:** Node.js `>=24.0.0`, pnpm `11.21.0`, ESM, DeepSeek Harness/Cordis public plugin APIs, `@deepseek-ai/dsh-tools`, Patchright Chromium, MCP SDK, Zod 4, `node:test`.
 
 **Spec:** `docs/superpowers/specs/2026-08-14-dsh-native-integration-design.md`
 
 ## Global Constraints
 
-- Work directly on `main`; commit after every green task.
-- Do not fork DSH or import its unpublished source paths.
-- Declare directly imported DSH packages as `latest`; the lockfile records the tested snapshot.
-- Do not add compatibility code for OpenCode, Node 20/22, older DSH releases, or legacy settings.
-- One DSH Agent ID is the Session identity. Never infer identity from the newest directory, active page, or process global.
-- Captured target JavaScript remains immutable. Environment repair stays in Hook and environment files.
-- Browser execution is evidence collection; the normal final deliverable remains a direct non-browser request implementation.
-- Use public DSH tool, service, event, projection, Profile/Patch, Bundle, and Preset APIs only.
-- Preserve all existing reverse-engineering tool names and behavior unless an adapter boundary requires a protocol-only representation change.
-- Every async tool path accepts an `AbortSignal`; shutdown must abort active work and await browser cleanup.
-- Do not begin implementation until `node --version` reports Node 24 or later.
+- Work directly on `main`; commit each task only after its focused checks are green.
+- Do not fork DSH or import unpublished DSH source paths.
+- Follow current releases: `@deepseek-ai/dsh` and `@deepseek-ai/cordis` use `latest`; `@deepseek-ai/dsh-tools` uses `next` until its `latest` dist-tag reaches the current DSH release line. The lockfile records the tested snapshot.
+- Do not directly depend on `@deepseek-ai/schemastery`; DeepSpider does not define user-facing DSH configuration schemas.
+- Do not add compatibility code for OpenCode, Node 20/22, older DSH releases, old settings, or the removed Agent layout.
+- One exact DSH `agent.id` is the Session identity. MCP uses one process-unique synthetic identity. Never select state by newest directory or active global.
+- Captured target JavaScript is immutable. Repair the environment through Hooks and `env.js`; preserve truncation rejection, target hashes, trace integrity, timeout evidence, and Node-identity concealment.
+- Browser execution gathers evidence. The normal final deliverable remains a direct non-browser request implementation.
+- Patchright Chromium is the only browser backend. Do not add Camoufox or a browser abstraction layer.
+- Keep the approved DSH surface only: Goals, Todo, Code Mode, Cordis dynamic tools, `web_search`, Bash, filesystem/search, jobs, Ask User, Skills, compaction, and pruning.
+- Do not mount Plan Mode, Subagents, Workflows, Ralph, `web_fetch`, or `evolve_skill`.
+- Cordis dynamic tools are intentionally shell-level trusted Host mutation; do not claim that arbitrary Cordis mutations are Session-isolated.
+- Every async domain tool receives the owning operation's `AbortSignal`. Process shutdown aborts active work and awaits browser cleanup.
+- Do not build migration, merge, or fallback behavior for package-managed Preset/Skill copies. Replace those two managed directories on launch.
+- Keep this implementation narrow. Test the normal lifecycle and the security/correctness invariants already present; do not build frameworks for rare edge cases.
+
+## Completed Groundwork
+
+The following commits are the starting point and must not be reimplemented:
+
+- `e673c09` / `1ab7b17`: Node 24, pnpm 11, DSH packages, secure Session paths.
+- `4012086` / `8e9b547`: per-Agent `RuntimeManager`, serialized same-Session operations, parallel cross-Session operations, awaited shutdown.
+- `7a67e35` / `fdfdf6a`: browser, console, WebSocket, Frame, and debugger state moved into `DeepSpiderRuntime`.
+- `dd608ae` / `099c27b`: framework-neutral Tool Catalog and MCP schema/dispatch adapter.
+- `a5d7b8c` / `0e73401`: 44 browser/network/debugger/Hook/stealth tools migrated to the Catalog with listener isolation.
+
+This plan replaces the former Tasks 7–14. There is no checkpoint task and no dynamic Skill mutation task.
 
 ---
 
-## Task 1: Raise the Runtime Floor and Add Current DSH Packages
+## Task 1: Make DataStore and Browser Capture Session-Owned
 
 **Files:**
 
-- Modify: `package.json`
-- Modify: `pnpm-lock.yaml`
-- Modify: `.github/workflows/publish.yml`
-- Modify: `test/dependencies.test.js`
-
-**Interfaces:**
-
-- `package.json#engines.node` is exactly `>=24.0.0`.
-- Direct dependencies are `@deepseek-ai/dsh`, `@deepseek-ai/cordis`, `@deepseek-ai/dsh-tools`, and `@deepseek-ai/schemastery`, each declared as `latest`.
-- OpenCode dependencies remain temporarily until Task 12 so intermediate commits stay runnable.
-
-- [ ] Verify the execution environment before editing:
-
-```bash
-node --version
-```
-
-Expected: `v24.x.x` or newer. Stop this implementation run if it is older; switch the active Node toolchain instead of adding compatibility code.
-
-- [ ] Extend `test/dependencies.test.js` with assertions for the Node engine and four direct DSH dependency declarations.
-
-- [ ] Run the dependency test and confirm RED:
-
-```bash
-node --test test/dependencies.test.js
-```
-
-Expected: failure because the current engine is `>=20.19.0` and DSH packages are absent.
-
-- [ ] Update `package.json` and both `actions/setup-node` rows in `.github/workflows/publish.yml` to Node `24`.
-
-- [ ] Add the four DSH packages using their current registry `latest` releases, keep their manifest specifiers as `latest`, and regenerate `pnpm-lock.yaml`:
-
-```bash
-pnpm install
-```
-
-- [ ] Assert only public package entrypoints are resolvable:
-
-```bash
-node -e "for (const p of ['@deepseek-ai/dsh','@deepseek-ai/cordis','@deepseek-ai/dsh-tools','@deepseek-ai/schemastery']) console.log(p, import.meta.resolve(p))"
-```
-
-Expected: four installed package URLs and no source-tree import.
-
-- [ ] Run focused and manifest checks:
-
-```bash
-node --test test/dependencies.test.js
-pnpm install --frozen-lockfile --ignore-scripts
-git diff --check
-```
-
-Expected: all exit 0.
-
-- [ ] Commit:
-
-```bash
-git add package.json pnpm-lock.yaml .github/workflows/publish.yml test/dependencies.test.js
-git commit -m "build: require Node 24 and add DSH"
-```
-
----
-
-## Task 2: Make Session Paths a Single Pure Contract
-
-**Files:**
-
-- Create: `src/runtime/SessionPaths.js`
-- Create: `test/session-paths.test.js`
-- Modify: `src/config/paths.js`
-
-**Interfaces:**
-
-```js
-export function hashSessionId(sessionId) // full lowercase SHA-256 hex
-export function createSessionPaths(sessionId, { root } = {})
-// => { sessionId, key, root, metadata, data, output, rebuild, screenshots, browserData }
-export function ensureSessionPaths(paths)
-```
-
-`createSessionPaths` rejects empty/non-string IDs. Every derived child must remain under `<root>/<full-sha256>`. `ensureSessionPaths` creates sensitive directories with mode `0o700`.
-
-- [ ] Add `test/session-paths.test.js` covering deterministic full hashes, different session isolation, path containment, invalid IDs, and directory permissions.
-
-- [ ] Run the focused test and confirm RED:
-
-```bash
-node --test test/session-paths.test.js
-```
-
-Expected: module-not-found failure.
-
-- [ ] Implement `SessionPaths.js` with `node:crypto`, `node:path`, and `node:fs`; default root is `~/.deepspider/sessions`.
-
-- [ ] Change `src/config/paths.js` to reuse the same secure-directory helper where it creates DeepSpider-owned sensitive directories. Do not redirect existing non-session paths yet.
-
-- [ ] Run focused and existing path consumers:
-
-```bash
-node --test test/session-paths.test.js test/rebuild-tools.test.js test/script-tools.test.js
-pnpm lint
-git diff --check
-```
-
-Expected: all tests pass; lint has no new warnings or errors.
-
-- [ ] Commit:
-
-```bash
-git add src/runtime/SessionPaths.js src/config/paths.js test/session-paths.test.js
-git commit -m "feat(runtime): isolate session storage paths"
-```
-
----
-
-## Task 3: Introduce the Session Runtime and Runtime Manager
-
-**Files:**
-
-- Create: `src/runtime/DeepSpiderRuntime.js`
-- Create: `src/runtime/RuntimeManager.js`
-- Create: `test/runtime-manager.test.js`
-
-**Interfaces:**
-
-```js
-export class DeepSpiderRuntime {
-  constructor({ sessionId, paths, browserFactory, dataStoreFactory, env })
-  getBrowserClient({ signal } = {})
-  getPage({ signal } = {})
-  getCDPSession({ signal } = {})
-  cdpEvaluate(expression, options)
-  navigateTo(url, options)
-  close(reason)
-}
-
-export class RuntimeManager {
-  constructor({ runtimeFactory })
-  run(agent, operation, { signal } = {})
-  get(agent, { signal } = {})
-  disposeAgent(agent, reason)
-  closeAll(reason)
-}
-```
-
-`run` serializes operations for one Agent ID. Runtime creation and operations for different Agent IDs proceed concurrently. The manager rejects work after `closeAll()` starts.
-
-- [ ] Write `test/runtime-manager.test.js` covering lazy creation, concurrent first-call deduplication, same-session serialization, cross-session parallelism, retry after failed creation, exact Agent disposal, abort while queued, idempotent runtime close, and `closeAll()` continuing after one cleanup failure.
-
-- [ ] Run the focused test and confirm RED:
-
-```bash
-node --test test/runtime-manager.test.js
-```
-
-Expected: module-not-found failures.
-
-- [ ] Implement `DeepSpiderRuntime` as an explicit owner of paths, browser lifecycle, active frame, CDP state, capture collections, selected target, rebuild context, and DataStore. Browser creation remains lazy.
-
-- [ ] Implement `RuntimeManager` with a `Map` keyed by `agent.id`, one shared creation promise per key, one promise queue per key, and one manager-level closing flag.
-
-- [ ] Ensure cancellation is checked before queueing, after queue acquisition, and before returning a lazily created Runtime.
-
-- [ ] Run focused tests and static checks:
-
-```bash
-node --test test/runtime-manager.test.js test/mcp-lifecycle.test.js
-pnpm lint
-git diff --check
-```
-
-Expected: all exit 0.
-
-- [ ] Commit:
-
-```bash
-git add src/runtime/DeepSpiderRuntime.js src/runtime/RuntimeManager.js test/runtime-manager.test.js
-git commit -m "feat(runtime): manage isolated agent runtimes"
-```
-
----
-
-## Task 4: Remove Browser and Debug State from Module Globals
-
-**Files:**
-
+- Modify: `src/store/DataStore.js`
 - Modify: `src/runtime/DeepSpiderRuntime.js`
-- Modify: `src/mcp/context.js`
-- Modify: `src/mcp/tools/browser.js`
-- Modify: `src/mcp/tools/network.js`
-- Modify: `src/mcp/tools/debugger.js`
-- Modify: `src/mcp/tools/capture.js`
-- Create: `test/runtime-state-isolation.test.js`
-- Modify: `test/mcp-lifecycle.test.js`
-
-**Interfaces:**
-
-- `createMcpContext({ sessionId = 'mcp-stdio', runtimeManager } = {})` returns runtime-bound context methods.
-- Tool modules no longer own `_savedSessionState`, console tracking, WebSocket buffers, CDP session, pause state, frames, or breakpoints at module scope.
-- The single stdio MCP process uses a standalone synthetic Agent `{ id: 'mcp-stdio' }`.
-
-- [ ] Add a state-isolation test that creates two Runtimes, mutates selected Frame, console, WebSocket, debugger, target-script, and rebuild state in one, and asserts the other remains empty.
-
-- [ ] Extend lifecycle coverage so cleanup closes the synthetic MCP Runtime through `RuntimeManager.closeAll()`.
-
-- [ ] Run the focused tests and confirm RED:
-
-```bash
-node --test test/runtime-state-isolation.test.js test/mcp-lifecycle.test.js
-```
-
-Expected: failures demonstrating shared module state or missing runtime fields.
-
-- [ ] Move all mutable fields into `DeepSpiderRuntime`. Keep constants and pure helper functions in tool modules.
-
-- [ ] Refactor `src/mcp/context.js` into a context factory that delegates browser/CDP/frame operations to an explicit Runtime. Remove singleton exports after all call sites in this task use the factory.
-
-- [ ] Make page switching and navigation clear only the owning Runtime's frame/CDP-derived state. Make listener installation idempotent per Runtime.
-
-- [ ] Run focused, browser-tool, and lifecycle tests:
-
-```bash
-node --test test/runtime-state-isolation.test.js test/mcp-lifecycle.test.js test/capture-tools.test.js test/script-tools.test.js test/rebuild-tools.test.js
-pnpm lint
-git diff --check
-```
-
-Expected: all exit 0 and `rg` finds no mutable top-level session arrays/variables in the three stateful tool modules.
-
-- [ ] Commit:
-
-```bash
-git add src/runtime/DeepSpiderRuntime.js src/mcp/context.js src/mcp/tools/browser.js src/mcp/tools/network.js src/mcp/tools/debugger.js src/mcp/tools/capture.js test/runtime-state-isolation.test.js test/mcp-lifecycle.test.js
-git commit -m "refactor(runtime): scope browser state by session"
-```
-
----
-
-## Task 5: Create the Framework-Neutral Tool Catalog and MCP Adapter
-
-**Files:**
-
-- Create: `src/tools/catalog.js`
-- Create: `src/tools/errors.js`
-- Create: `src/adapters/mcp-schema.js`
-- Create: `src/adapters/mcp-tools.js`
-- Create: `test/tool-catalog.test.js`
-- Create: `test/mcp-schema.test.js`
-- Modify: `src/mcp/server.js`
-
-**Interfaces:**
-
-```js
-export function defineDeepSpiderTool({ name, description, parameters, execute, render })
-export function createToolCatalog(groups)
-export class DeepSpiderToolError extends Error { code; details }
-export function parameterSpecToZodShape(spec)
-export function registerMcpCatalog(server, catalog, { runtimeManager, agent })
-```
-
-Catalog parameter schemas use DSH's public plain `ParameterSchemaSpec`. The MCP converter supports only the shapes actually used by DeepSpider: string, number, integer, boolean, array, object, json, enum, const, `oneOf`, optional properties, and required properties. Tool handlers return domain JSON values or throw `DeepSpiderToolError`; adapters own protocol envelopes.
-
-- [ ] Add catalog tests for duplicate-name rejection, immutable definitions, explicit Runtime dispatch, signal forwarding, JSON rendering, and typed errors.
-
-- [ ] Add schema tests for every supported shape and for clear rejection of unsupported shapes.
-
-- [ ] Run focused tests and confirm RED:
-
-```bash
-node --test test/tool-catalog.test.js test/mcp-schema.test.js
-```
-
-Expected: module-not-found failures.
-
-- [ ] Implement the catalog primitives and typed error.
-
-- [ ] Implement the small DSH-spec-to-Zod converter; do not add a general JSON Schema library.
-
-- [ ] Implement `registerMcpCatalog` using `server.registerTool`. Resolve the synthetic MCP Runtime through `RuntimeManager.run`, translate results to MCP text content, and map typed errors to `isError: true`.
-
-- [ ] Change `src/mcp/server.js` to construct the standalone manager/Agent and register an initially empty catalog through the adapter alongside the still-unmigrated legacy groups. This commit establishes the boundary without changing published tools.
-
-- [ ] Run focused and server lifecycle checks:
-
-```bash
-node --test test/tool-catalog.test.js test/mcp-schema.test.js test/mcp-lifecycle.test.js
-pnpm lint
-git diff --check
-```
-
-Expected: all exit 0.
-
-- [ ] Commit:
-
-```bash
-git add src/tools/catalog.js src/tools/errors.js src/adapters/mcp-schema.js src/adapters/mcp-tools.js src/mcp/server.js test/tool-catalog.test.js test/mcp-schema.test.js
-git commit -m "refactor(tools): add framework-neutral catalog"
-```
-
----
-
-## Task 6: Migrate Browser-Facing Tools into the Catalog
-
-**Files:**
-
-- Create: `src/tools/groups/browser.js`
-- Create: `src/tools/groups/network.js`
-- Create: `src/tools/groups/debugger.js`
-- Create: `src/tools/groups/hook.js`
-- Create: `src/tools/groups/stealth.js`
-- Modify: `src/tools/catalog.js`
-- Modify: `src/mcp/server.js`
-- Delete: `src/mcp/tools/browser.js`
-- Delete: `src/mcp/tools/network.js`
-- Delete: `src/mcp/tools/debugger.js`
-- Delete: `src/mcp/tools/hook.js`
-- Delete: `src/mcp/tools/stealth.js`
-- Modify: `test/tool-catalog.test.js`
+- Modify: `src/browser/client.js`
+- Modify: `src/browser/interceptors/NetworkInterceptor.js`
+- Modify: `src/browser/interceptors/ScriptInterceptor.js`
+- Create: `test/data-store-isolation.test.js`
 - Modify: `test/runtime-state-isolation.test.js`
 
 **Interfaces:**
 
-- Every group exports `tools`, an array of catalog definitions.
-- Every handler signature is `execute(runtime, args, signal)`.
-- Tool names and argument contracts remain the existing public names.
-- Browser, Network, Debugger, Hook, and Stealth handlers access state only through their supplied Runtime.
-
-- [ ] Extend the catalog test to snapshot the names and parameter specs of all live browser-facing tools and assert each handler receives a Runtime explicitly.
-
-- [ ] Run the focused test and confirm RED because the group modules do not exist:
-
-```bash
-node --test test/tool-catalog.test.js test/runtime-state-isolation.test.js
+```js
+new DataStore({ root })
+new BrowserClient({ dataStore })
+new NetworkInterceptor(cdpClient, page, dataStore)
+new ScriptInterceptor(cdpClient, page, dataStore)
 ```
 
-- [ ] Move pure descriptions, schemas, and handlers group by group. Replace calls to MCP context globals with Runtime methods/fields. Replace MCP envelopes inside handlers with domain JSON returns.
+`root` is exactly one Runtime's `paths.data`. A `DataStore` instance derives `sitesDir` and `globalIndexPath` from that root and imports no process-global storage path. `BrowserClient` and both interceptors require the injected instance; there is no `getDataStore()` singleton.
 
-- [ ] Register these definitions only through `registerMcpCatalog`; delete their legacy `register*Tools` modules immediately so a tool cannot be registered twice.
+- [ ] Add `test/data-store-isolation.test.js` with two temporary roots. Save one response and one script with the same site/IDs in both stores, then prove indexes, source files, search results, cleanup, and current capture Session IDs do not cross roots.
 
-- [ ] Preserve operation cancellation by passing `signal` into navigation, evaluation, waits, CDP calls, and loops.
+- [ ] Extend `test/runtime-state-isolation.test.js` to create two real default `DeepSpiderRuntime` instances under different temporary Session roots and assert:
 
-- [ ] Verify tool count, contracts, state isolation, and a real browser smoke:
+  - `runtimeA.dataStore !== runtimeB.dataStore`;
+  - each DataStore root equals its Runtime's `paths.data`;
+  - each default BrowserClient receives the same DataStore instance owned by its Runtime.
+
+- [ ] Run the focused tests and confirm RED:
 
 ```bash
-node --test test/tool-catalog.test.js test/runtime-state-isolation.test.js test/mcp-lifecycle.test.js
-node --test test/integration/browser-mcp-smoke.test.js
+node --test test/data-store-isolation.test.js test/runtime-state-isolation.test.js
+```
+
+Expected: failure because `DataStore` still uses module constants and all browser interceptors still call the singleton.
+
+- [ ] Refactor `DataStore`:
+
+  - validate `root` as a non-empty absolute path;
+  - set `this.root`, `this.sitesDir`, and `this.globalIndexPath` in the constructor;
+  - replace every `DATA_DIR`, `SITES_DIR`, and `GLOBAL_INDEX` use with those instance fields;
+  - preserve `0o700` directory creation, `0o600` sensitive files, path containment, site locks, cleanup locking, full-file search fallback, and existing storage limits;
+  - delete the module singleton and `getDataStore()` export.
+
+- [ ] Change the default Runtime factories to the exact ownership chain:
+
+```js
+dataStoreFactory = ({ paths }) => new DataStore({ root: paths.data })
+browserFactory = ({ dataStore }) => new BrowserClient({ dataStore })
+```
+
+- [ ] Change `BrowserClient` to store the required `dataStore`, call `startSession()` on that instance in `launch()`, and pass it to both interceptors created by `setupPage()`.
+
+- [ ] Remove all `getDataStore` imports from Runtime, browser, and interceptors. Do not add a temporary alias.
+
+- [ ] Run focused and regression checks:
+
+```bash
+node --test test/data-store-isolation.test.js test/runtime-state-isolation.test.js test/runtime-manager.test.js test/script-tools.test.js test/rebuild-tools.test.js
 pnpm lint
 git diff --check
 ```
 
-Expected: the MCP smoke exits 0 and all migrated tool names are registered exactly once.
+Expected: all tests pass; lint has no errors or new warnings.
 
 - [ ] Commit:
 
 ```bash
-git add src/tools src/mcp/server.js src/mcp/tools test/tool-catalog.test.js test/runtime-state-isolation.test.js
-git commit -m "refactor(tools): migrate browser tools to catalog"
+git add src/store/DataStore.js src/runtime/DeepSpiderRuntime.js src/browser/client.js src/browser/interceptors/NetworkInterceptor.js src/browser/interceptors/ScriptInterceptor.js test/data-store-isolation.test.js test/runtime-state-isolation.test.js
+git commit -m "refactor(runtime): isolate captured data by session"
 ```
 
 ---
 
-## Task 7: Migrate Evidence and Rebuild Tools into the Catalog
+## Task 2: Finish the 51-Tool Catalog and Make MCP Process-Unique
 
 **Files:**
 
 - Create: `src/tools/groups/script.js`
 - Create: `src/tools/groups/capture.js`
 - Create: `src/tools/groups/rebuild.js`
-- Modify: `src/tools/catalog.js`
-- Modify: `src/runtime/DeepSpiderRuntime.js`
-- Modify: `src/store/DataStore.js`
+- Create: `src/tools/index.js`
+- Modify: `src/mcp/context.js`
 - Modify: `src/mcp/server.js`
 - Delete: `src/mcp/tools/script.js`
 - Delete: `src/mcp/tools/capture.js`
@@ -410,270 +136,264 @@ git commit -m "refactor(tools): migrate browser tools to catalog"
 - Modify: `test/capture-tools.test.js`
 - Modify: `test/rebuild-tools.test.js`
 - Modify: `test/tool-catalog.test.js`
+- Modify: `test/mcp-lifecycle.test.js`
+- Modify: `test/integration/browser-mcp-smoke.test.js`
 
 **Interfaces:**
 
-- `DeepSpiderRuntime.dataStore` is created with its Session `data` path.
-- Artifact-producing tools write only beneath the supplied Runtime's `SessionPaths`.
-- `export_script_for_rebuild`, probe, patch, trace, and verification retain immutable-target checks and hashes.
-- Tool outputs contain session-relative artifact references rather than process-global or newest-directory paths.
+```js
+export const DEEPSPIDER_TOOL_COUNT = 51
+export const deepSpiderCatalog = createToolCatalog([
+  browserTools,
+  networkTools,
+  debuggerTools,
+  hookTools,
+  stealthTools,
+  scriptTools,
+  captureTools,
+  rebuildTools,
+])
 
-- [ ] Rewrite the three focused test suites to call catalog handlers with explicit fake Runtimes and assert session-owned paths.
-
-- [ ] Add a two-Runtime test proving script IDs, capture indexes, rebuild directories, and selected target state cannot cross Sessions.
-
-- [ ] Run focused tests and confirm RED:
-
-```bash
-node --test test/script-tools.test.js test/capture-tools.test.js test/rebuild-tools.test.js test/tool-catalog.test.js
+export function createMcpSessionId(randomUUIDFn = randomUUID)
+// => `mcp-${randomUUIDFn()}`
 ```
 
-- [ ] Move the remaining groups into catalog definitions and change protocol envelopes to domain JSON values.
+The remaining tool names are exactly:
 
-- [ ] Make `DataStore` an instance owned by the Runtime instead of a site/process singleton. Pass its root explicitly; preserve secure file modes, write/cleanup locking, full-file search, truncation rejection, and trace integrity behavior.
+```text
+list_scripts
+get_script_source
+find_in_script
+collect_env
+collect_property
+export_rebuild_bundle
+analyze_runtime_trace
+```
 
-- [ ] Remove all legacy MCP group registration from `src/mcp/server.js`. Its only tool registration path must now be `registerMcpCatalog`.
+- [ ] Rewrite the three focused suites to import Catalog groups and call `definition.execute(runtime, args, signal)` directly. Fake Runtimes expose only the properties the domain handlers need.
 
-- [ ] Run all tool, rebuild, and real MCP checks:
+- [ ] Extend `test/tool-catalog.test.js` to assert:
+
+  - the central catalog has exactly 51 unique names in stable group order;
+  - every definition and parameter tree is frozen;
+  - all handlers have the three-argument Runtime contract;
+  - the seven names above are present and no `evolve_skill` exists;
+  - MCP registers exactly the central catalog, with no second legacy registration path.
+
+- [ ] Extend `test/mcp-lifecycle.test.js` to inject a deterministic UUID function and prove two default contexts receive different `mcp-<uuid>` identities while an explicitly supplied test ID stays unchanged for that process context.
+
+- [ ] Run the focused tests and confirm RED:
 
 ```bash
-node --test test/script-tools.test.js test/capture-tools.test.js test/rebuild-tools.test.js test/rebuild-bundle.test.js test/rebuild-runtime.test.js test/rebuild-trace.test.js test/rebuild-protected-target.test.js test/tool-catalog.test.js test/runtime-state-isolation.test.js
+node --test test/script-tools.test.js test/capture-tools.test.js test/rebuild-tools.test.js test/tool-catalog.test.js test/mcp-lifecycle.test.js
+```
+
+Expected: module-not-found and 44-versus-51 contract failures.
+
+- [ ] Move the seven handlers into Catalog definitions:
+
+  - return canonical domain JSON, never MCP `{ content, isError }` envelopes;
+  - use `runtime.dataStore`, `runtime.paths.rebuild`, `runtime.getPage()`, `runtime.getActiveFrameContext()`, and `runtime.cdpEvaluate()` directly;
+  - throw `DeepSpiderToolError` with stable codes for expected domain failures;
+  - keep `collect_property` main-frame and iframe facts on the same complete schema;
+  - keep rebuild tasks non-overwriting and rooted only below `runtime.paths.rebuild`;
+  - preserve truncated-target rejection, unchanged `target.js`, manifest hashes, dynamic-source integrity, trace aggregation, runtime exception/timeout evidence, and stack concealment.
+
+- [ ] Add `src/tools/index.js` as the only complete group assembly. MCP and DSH must import `deepSpiderCatalog` from this module rather than repeat the group list.
+
+- [ ] Change the MCP context default from the literal `mcp-stdio` to `createMcpSessionId()`. Generate it once when `src/mcp/server.js` starts, reuse it for all calls in that process, and keep explicit `sessionId` injection for tests.
+
+- [ ] Delete all three legacy MCP tool modules. `src/mcp/server.js` must have one tool registration statement:
+
+```js
+registerMcpCatalog(server, deepSpiderCatalog, {
+  runtimeManager,
+  agent: context.agent,
+})
+```
+
+- [ ] Run the full reverse-tool and real MCP checks:
+
+```bash
+node --test test/script-tools.test.js test/capture-tools.test.js test/rebuild-tools.test.js test/rebuild-bundle.test.js test/rebuild-runtime.test.js test/rebuild-trace.test.js test/rebuild-protected-target.test.js test/rebuild-workflow-contract.test.js test/tool-catalog.test.js test/mcp-lifecycle.test.js test/runtime-state-isolation.test.js
 node --test test/integration/browser-mcp-smoke.test.js
 pnpm lint
 git diff --check
 ```
 
-Expected: all exit 0; MCP exposes the same complete DeepSpider tool set through the catalog.
+Expected: all exit 0; the real MCP server reports and exposes 51 Catalog tools.
+
+- [ ] Confirm there is no singleton/legacy registration residue:
+
+```bash
+rg -n "getDataStore|registerScriptTools|registerCaptureTools|registerRebuildTools|mcp-stdio" src test
+```
+
+Expected: no production match; an explicit test fixture string is allowed only where identity injection is under test.
 
 - [ ] Commit:
 
 ```bash
-git add src/tools src/runtime/DeepSpiderRuntime.js src/store/DataStore.js src/mcp/server.js src/mcp/tools test/script-tools.test.js test/capture-tools.test.js test/rebuild-tools.test.js test/tool-catalog.test.js
-git commit -m "refactor(tools): migrate evidence tools to catalog"
+git add -A src/tools src/mcp test/script-tools.test.js test/capture-tools.test.js test/rebuild-tools.test.js test/tool-catalog.test.js test/mcp-lifecycle.test.js test/integration/browser-mcp-smoke.test.js
+git commit -m "refactor(tools): complete the shared tool catalog"
 ```
 
 ---
 
-## Task 8: Define Event-Sourced Session Checkpoints
-
-**Files:**
-
-- Create: `src/dsh/session-state.js`
-- Create: `test/dsh-session-state.test.js`
-
-**Interfaces:**
-
-```js
-export const CHECKPOINT_EVENT_TYPE = 'deepspider/checkpoint'
-export const checkpointSchema // Schemastery schema
-export function normalizeCheckpoint(input)
-export function applyCheckpoint(state, event)
-export function createCheckpointProjection()
-export function renderCheckpointContext(state)
-```
-
-The payload contains `phase`, `target`, `artifacts`, and `verification` exactly as specified. Artifact paths are relative to the Session root and hashes are lowercase SHA-256. Folding ignores unrelated event types and selects the latest valid checkpoint.
-
-- [ ] Add tests for every phase, normalization, invalid traversal/absolute artifact paths, invalid hashes, unrelated events, latest-event folding, empty state, and stable model-visible rendering.
-
-- [ ] Run the focused test and confirm RED:
-
-```bash
-node --test test/dsh-session-state.test.js
-```
-
-Expected: module-not-found failure.
-
-- [ ] Implement the pure checkpoint contract and return the public DSH projection descriptor `{ key, stateVersion, schema, init, apply, view }`.
-
-- [ ] Keep event values small; reject embedded script/body/trace content instead of adding storage behavior here.
-
-- [ ] Run focused and workflow-contract checks:
-
-```bash
-node --test test/dsh-session-state.test.js test/rebuild-workflow-contract.test.js
-pnpm lint
-git diff --check
-```
-
-Expected: all exit 0.
-
-- [ ] Commit:
-
-```bash
-git add src/dsh/session-state.js test/dsh-session-state.test.js
-git commit -m "feat(dsh): define session checkpoint projection"
-```
-
----
-
-## Task 9: Add the Process-Wide DSH Host Plugin
-
-**Files:**
-
-- Create: `src/dsh/host-plugin.js`
-- Create: `test/dsh-host-plugin.test.js`
-
-**Interfaces:**
-
-```js
-export const name = 'deepspider-host'
-export const inject = [/* public DSH services actually consumed */]
-export function apply(ctx, config)
-```
-
-`apply` provides one `ctx.deepSpiderRuntimeManager`, registers the checkpoint projection, disposes an exact Runtime on the matching Agent disposal event, and calls `closeAll()` during plugin disposal. It registers no model-facing tools.
-
-- [ ] Build a focused fake Cordis context test for service provision, one projection registration, exact Agent disposal, idempotent plugin disposal, and cleanup continuation when one Runtime fails to close.
-
-- [ ] Run the focused test and confirm RED:
-
-```bash
-node --test test/dsh-host-plugin.test.js
-```
-
-- [ ] Implement `apply` against installed public DSH/Cordis APIs. Keep Runtime construction injectable in config for tests, but expose no user-facing compatibility switches.
-
-- [ ] Verify no tool registration occurs in Host scope.
-
-- [ ] Run focused and manager tests:
-
-```bash
-node --test test/dsh-host-plugin.test.js test/runtime-manager.test.js test/dsh-session-state.test.js
-pnpm lint
-git diff --check
-```
-
-Expected: all exit 0.
-
-- [ ] Commit:
-
-```bash
-git add src/dsh/host-plugin.js test/dsh-host-plugin.test.js
-git commit -m "feat(dsh): provide host runtime manager"
-```
-
----
-
-## Task 10: Register Native Tools and Prompt Context in the Agent Plugin
+## Task 3: Add Native DSH Adapter, Host Service, and Agent Plugin
 
 **Files:**
 
 - Create: `src/adapters/dsh-tools.js`
+- Create: `src/dsh/host-plugin.js`
 - Create: `src/dsh/agent-plugin.js`
 - Create: `test/dsh-tools.test.js`
+- Create: `test/dsh-host-plugin.test.js`
 - Create: `test/dsh-agent-plugin.test.js`
-- Modify: `src/dsh/session-state.js`
-- Modify: `src/config/paths.js`
+- Modify: `package.json`
+- Modify: `pnpm-lock.yaml`
+- Modify: `test/dependencies.test.js`
 
 **Interfaces:**
 
 ```js
 export function registerDshCatalog(ctx, catalog, { runtimeManager })
-export function apply(ctx, config)
+
+// src/dsh/host-plugin.js
+export const name = 'deepspider-host'
+export const provide = 'deepSpiderRuntimeManager'
+export const inject = ['agents']
+export function apply(ctx, config = {})
+
+// src/dsh/agent-plugin.js
+export const name = 'deepspider-agent'
+export const inject = ['tools', 'systemPrompt', 'deepSpiderRuntimeManager']
+export function apply(ctx)
 ```
 
-Each native tool is created with `defineTool`. Its `execute(args, exec)` requires `exec.agent.id`, dispatches through `RuntimeManager.run(exec.agent, ...)`, forwards `exec.signal`, renders domain JSON, and appends a validated checkpoint only when the tool reports a workflow-state transition.
+The Host-provided value is the one process-wide `RuntimeManager`. The Agent plugin is stateless and registers the shared Catalog into the current Agent scope.
 
-- [ ] Add adapter tests for parameter-schema pass-through, exact Agent dispatch, signal forwarding, missing-Agent failure, typed-error rendering, and checkpoint append behavior.
+- [ ] Change only `@deepseek-ai/dsh-tools` from `latest` to `next`, run `pnpm install`, and extend `test/dependencies.test.js` to enforce this three-package policy:
 
-- [ ] Add Agent plugin tests for tool registration, stable invariant prompt section, projected checkpoint context, and `evolve_skill` writing only below `~/.deepspider/dsh/skills`.
-
-- [ ] Run focused tests and confirm RED:
-
-```bash
-node --test test/dsh-tools.test.js test/dsh-agent-plugin.test.js
+```json
+{
+  "@deepseek-ai/cordis": "latest",
+  "@deepseek-ai/dsh": "latest",
+  "@deepseek-ai/dsh-tools": "next"
+}
 ```
 
-- [ ] Implement `registerDshCatalog` using only `@deepseek-ai/dsh-tools` public exports.
+Do not remove OpenCode or Schemastery yet; Task 4 deletes them in one runnable boundary.
 
-- [ ] Implement a stateless Agent plugin. Register the catalog in Agent scope; never store a current Agent, Runtime, browser, Page, Frame, or task directory on the plugin module/context.
+- [ ] Add adapter tests using a fake `ctx.tools.register` and real `defineTool` output. Prove for a representative definition that:
 
-- [ ] Add only stable prompt invariants: direct-request goal, browser-as-evidence, generic decisions, immutable target, Hook-based environment repair, Node identity concealment, and request-level verification. Do not duplicate the eight-stage Skill text.
+  - `name`, `description`, and the Catalog parameter spec pass through unchanged;
+  - output is declared as `{ schema: { type: 'json' }, render(...) }`;
+  - `execute(args, exec)` requires `exec.agent.id`;
+  - the exact `exec.agent` and `exec.signal` reach `RuntimeManager.run()` and the domain handler;
+  - successful canonical JSON is returned unchanged;
+  - a Catalog `render(value)` becomes one DSH text block;
+  - a `DeepSpiderToolError` becomes a failed native tool call with the stable user-visible message `[CODE] message` and is not converted to an MCP envelope.
 
-- [ ] Implement `evolve_skill` with a fixed destination under DSH home and explicit allowed skill names; no package-source writes or relative-path joining from model input.
+- [ ] Add Host plugin tests with a real Cordis `Context` or a contract-faithful fake. Prove:
 
-- [ ] Run focused, tool, and security tests:
+  - exactly one manager is provided as `deepSpiderRuntimeManager`;
+  - `config.runtimeManager` may inject a test manager but is not exposed as a product option;
+  - `agent/disposed` calls `disposeAgent()` for the exact payload Agent;
+  - the plugin effect disposer calls and awaits `closeAll()`;
+  - the Host plugin registers no model-facing tool or custom Session projection.
+
+- [ ] Add Agent plugin tests proving:
+
+  - all 51 `deepSpiderCatalog` definitions are registered through `registerDshCatalog`;
+  - one stable system-prompt section is registered;
+  - the prompt requires generic reverse analysis, browser evidence, immutable target, Hook/env repair, Node-environment probing/concealment, and request-level verification;
+  - the plugin owns no module-level Agent, Runtime, Page, Frame, browser, DataStore, selected task, or checkpoint state;
+  - `evolve_skill` and a custom checkpoint event are absent.
+
+- [ ] Run the new tests and confirm RED before implementation:
 
 ```bash
-node --test test/dsh-tools.test.js test/dsh-agent-plugin.test.js test/plugin-security.test.js test/rebuild-workflow-contract.test.js
+node --test test/dependencies.test.js test/dsh-tools.test.js test/dsh-host-plugin.test.js test/dsh-agent-plugin.test.js
+```
+
+- [ ] Implement `registerDshCatalog()` with only public `@deepseek-ai/dsh-tools` exports:
+
+```js
+ctx.tools.register(defineTool({
+  name: definition.name,
+  description: definition.description,
+  parameters: definition.parameters,
+  output: {
+    schema: { type: 'json' },
+    render: (_args, value) => [{
+      type: 'text',
+      text: definition.render
+        ? definition.render(value)
+        : JSON.stringify(value, null, 2),
+    }],
+  },
+  async execute(args, exec) {
+    if (typeof exec.agent?.id !== 'string' || exec.agent.id.length === 0) {
+      throw new Error('[DSH_AGENT_REQUIRED] Native DeepSpider tools require an Agent Session')
+    }
+    try {
+      return await runtimeManager.run(
+        exec.agent,
+        (runtime, signal) => definition.execute(runtime, args, signal),
+        { signal: exec.signal },
+      )
+    } catch (error) {
+      if (error instanceof DeepSpiderToolError) {
+        throw new Error(`[${error.code}] ${error.message}`, { cause: error })
+      }
+      throw error
+    }
+  },
+}))
+```
+
+Do not import Schemastery or `@deepseek-ai/dsh-llm`, and do not create a second parameter translator. MCP keeps its structured `{ code, message, details }` error envelope; the native DSH boundary keeps the same code in deterministic text because only DSH-owned `HarnessError` instances receive structured DSH error metadata.
+
+- [ ] Implement the Host plugin with `ctx.provide('deepSpiderRuntimeManager', manager)`, `ctx.on('agent/disposed', ...)`, and `ctx.effect(() => () => manager.closeAll(...))`. Let `RuntimeManager` track in-flight disposal so final Host shutdown awaits browser cleanup even though `agent/disposed` itself is an emitted event.
+
+- [ ] Implement the Agent plugin with one Catalog registration call and one concise invariant prompt section. Do not duplicate the full Skill or eight-stage workflow text.
+
+- [ ] Run focused and existing Runtime/Catalog checks:
+
+```bash
+node --test test/dependencies.test.js test/dsh-tools.test.js test/dsh-host-plugin.test.js test/dsh-agent-plugin.test.js test/tool-catalog.test.js test/runtime-manager.test.js
+pnpm test
 pnpm lint
 git diff --check
 ```
 
-Expected: all exit 0.
+Expected: all unit tests pass; lint has no errors.
 
 - [ ] Commit:
 
 ```bash
-git add src/adapters/dsh-tools.js src/dsh/agent-plugin.js src/dsh/session-state.js src/config/paths.js test/dsh-tools.test.js test/dsh-agent-plugin.test.js
-git commit -m "feat(dsh): register native DeepSpider tools"
+git add src/adapters/dsh-tools.js src/dsh/host-plugin.js src/dsh/agent-plugin.js test/dsh-tools.test.js test/dsh-host-plugin.test.js test/dsh-agent-plugin.test.js package.json pnpm-lock.yaml test/dependencies.test.js
+git commit -m "feat(dsh): register native DeepSpider runtime tools"
 ```
 
 ---
 
-## Task 11: Compose the Spider Preset and DeepSpider Patch
+## Task 4: Compose the Spider Preset, Launch DSH Web, and Delete OpenCode
 
 **Files:**
 
 - Create: `dsh/cordis.patch.yml`
 - Create: `dsh/agent-presets/spider/agent.cordis.yml`
 - Create: `dsh/agent-presets/spider/preset.yml`
-- Create: `test/dsh-composition.test.js`
-- Modify: `package.json`
-
-**Interfaces:**
-
-- The patch mounts `src/dsh/host-plugin.js`, adds the installed Spider Preset root, and selects `spider` by default.
-- The Preset mounts `src/dsh/agent-plugin.js`, the DeepSpider Skill, Goals, shell, filesystem, search, jobs, Ask User, compaction, and pruning.
-- It enables `web_search` and excludes Plan Mode, Subagents, Workflows, Ralph, Code Mode, generic Todo, `web_fetch`, and dynamic Cordis.
-- `package.json#files` includes `dsh/` and removes nothing needed by the still-existing launcher.
-
-- [ ] Add a composition test that invokes the installed DSH CLI's config dump/mount validation against `dsh/cordis.patch.yml` and inspects the resolved config.
-
-- [ ] Assert intended capabilities are present once, excluded capabilities are absent, `spider` is default, plugin paths resolve inside the package, and permission mode defaults to `danger-full-access` at launch configuration.
-
-- [ ] Run the focused test and confirm RED:
-
-```bash
-node --test test/dsh-composition.test.js
-```
-
-- [ ] Write the minimal Patch and Preset rows using the installed DSH version's public plugin names and schemas. Use relative module specifiers from the installed patch/Preset directory.
-
-- [ ] Add `dsh/` to the published file list.
-
-- [ ] Validate through the real DSH config loader, not a YAML-only parser:
-
-```bash
-node --test test/dsh-composition.test.js
-pnpm lint
-npm pack --dry-run --json
-git diff --check
-```
-
-Expected: composition test exits 0 and the dry-run archive lists the patch and both Preset files.
-
-- [ ] Commit:
-
-```bash
-git add dsh package.json test/dsh-composition.test.js
-git commit -m "feat(dsh): compose spider agent preset"
-```
-
----
-
-## Task 12: Replace the CLI Launcher and Delete OpenCode
-
-**Files:**
-
 - Create: `src/dsh/launcher.js`
+- Create: `test/dsh-composition.test.js`
 - Create: `test/dsh-launcher.test.js`
-- Create: `test/integration/dsh-smoke.test.js`
 - Modify: `bin/cli.js`
 - Modify: `src/cli/commands/help.js`
 - Modify: `package.json`
 - Modify: `pnpm-lock.yaml`
+- Modify: `pnpm-workspace.yaml`
 - Modify: `scripts/smoke-packed-cli.mjs`
 - Delete: `src/agent/config.js`
 - Delete: `src/agent/index.js`
@@ -682,7 +402,8 @@ git commit -m "feat(dsh): compose spider agent preset"
 - Delete: `src/agent/sandbox.js`
 - Delete: `src/agent/tui.js`
 - Delete: `src/cli/commands/config.js`
-- Delete: `plugins/deepspider-plugin/`
+- Delete: `plugins/deepspider-plugin/package.json`
+- Delete: `plugins/deepspider-plugin/server.js`
 - Delete: `agents/spider.md`
 - Delete: `test/agent-config.test.js`
 - Delete: `test/agent-index.test.js`
@@ -690,67 +411,153 @@ git commit -m "feat(dsh): compose spider agent preset"
 - Delete: `test/opencode-binary.test.js`
 - Delete: `test/sandbox.test.js`
 - Delete: `test/config-command.test.js`
+- Delete: `test/plugin-security.test.js`
 - Delete: `test/integration/opencode-smoke.test.js`
 
-**Interfaces:**
+**Launcher interfaces:**
 
 ```js
-export function resolveDshBinary({ packageRoot } = {})
-export function buildDshLaunch({ port, verbose, env, packageRoot } = {})
+export function resolveDshBinary({ packageJsonPath } = {})
+export function resolveDshLayout({ packageRoot, env } = {})
+export function syncManagedDshAssets(layout)
+export function buildDshLaunch({ port, verbose, packageRoot, env } = {})
 export function startDshAgent(options)
 // => { child, closed, close(reason) }
 ```
 
-`resolveDshBinary` reads `@deepseek-ai/dsh/package.json`, resolves `bin.dsh`, and returns the real JS entry. `startDshAgent` spawns `process.execPath` with `shell: false`, arguments `web --patch <installed patch>`, and inherited stdio. It sets DeepSpider roots and defaults `DSH_PERMISSION_MODE` to `danger-full-access`. SIGINT/SIGTERM close DSH, which must await Host-plugin browser cleanup.
+`resolveDshBinary()` reads `@deepseek-ai/dsh/package.json` and resolves its declared `bin.dsh`; it never uses `node_modules/.bin`. `syncManagedDshAssets()` replaces only these two resolved targets:
 
-- [ ] Add launcher tests for installed-layout binary resolution, no `.bin` wrapper, exact arguments, `--port` forwarding including `0`, verbose forwarding, environment roots, YOLO default, `shell: false`, child error/nonzero propagation, idempotent close, and bounded signal shutdown.
-
-- [ ] Add a real DSH smoke that starts `deepspider agent --port 0`, waits for Web readiness, verifies the Spider Preset and native tools, creates two Sessions, then terminates cleanly.
-
-- [ ] Run launcher tests and confirm RED:
-
-```bash
-node --test test/dsh-launcher.test.js
+```text
+$DSH_HOME/.agent-presets/spider
+$DSH_HOME/skills/deepspider
 ```
 
-- [ ] Implement the launcher and replace the `agent` branch in `bin/cli.js`. Remove `--model` and `config`; retain `--port` and `--verbose`.
+The launcher then starts:
 
-- [ ] Remove all OpenCode packages, OpenCode-only `pnpm.onlyBuiltDependencies`, source, plugin, Agent markdown, commands, and tests. Regenerate the lockfile with `pnpm install`.
+```text
+<process.execPath> <real dsh bin> web --patch <installed dsh/cordis.patch.yml> [--port N] [--verbose]
+```
 
-- [ ] Remove `agents/` and `plugins/` from `package.json#files`; keep `skills/` and the new `dsh/` package surface.
+with `shell: false`, inherited stdio, and default `DSH_PERMISSION_MODE=danger-full-access`.
 
-- [ ] Update the packed CLI smoke to assert installed `agent --help`/argument behavior and DSH binary resolution without starting an interactive permanent server.
+- [ ] Add composition tests that validate the source Preset contract before boot:
 
-- [ ] Run focused and real DSH tests:
+  - `preset.yml` identifies `spider` clearly;
+  - `agent.cordis.yml` contains persona, agent instructions, Bash/Pwsh, filesystem/search, jobs, Skill discovery/tool, Goals, compaction/pruning, Ask User, Todo, Web search, Cordis, Code Mode, and the DeepSpider Agent plugin;
+  - Web config is exactly `fetch: false` with search enabled;
+  - presentation config is exactly `mode: code`;
+  - Plan Mode, Subagents, Workflows, Ralph, and evolve tooling are absent;
+  - `dsh/cordis.patch.yml` mounts the Host plugin and changes the existing `agent-presets` row's default to `spider`.
+
+- [ ] Add a real DSH composition check using a temporary `DSH_HOME`:
 
 ```bash
-node --test test/dsh-launcher.test.js
-node --test test/integration/dsh-smoke.test.js
-pnpm smoke:pack
+DSH_HOME=/private/tmp/deepspider-dsh-composition \
+DEEPSPIDER_HOST_PLUGIN_PATH="$PWD/src/dsh/host-plugin.js" \
+node "$(node -p \"const p=require.resolve('@deepseek-ai/dsh/package.json'); const j=require(p); require('node:path').resolve(require('node:path').dirname(p), j.bin.dsh)\")" \
+  web --patch dsh/cordis.patch.yml --dump-config
+```
+
+Parse the dumped composition and assert the Host plugin resolves, `agent-presets.default` is `spider`, and the Web profile still supplies `codeRuntime`, Session persistence, Goals, permissions, and the model route. This is the loader-level proof; YAML text matching alone is insufficient.
+
+- [ ] Add launcher tests for:
+
+  - real package-manifest binary resolution;
+  - package-root paths when installed under a temporary `node_modules/deepspider` layout;
+  - exact replacement of the managed Preset and Skill directories, including removal of a stale file;
+  - preservation of all unrelated `$DSH_HOME` files/directories;
+  - exact `web --patch` argv, `--port 0`, `--verbose`, `shell: false`, inherited stdio, and YOLO default;
+  - preserving an explicitly supplied `DSH_PERMISSION_MODE`;
+  - `DEEPSPIDER_HOST_PLUGIN_PATH` pointing to the installed `src/dsh/host-plugin.js`;
+  - `DEEPSPIDER_AGENT_PLUGIN_PATH` pointing to the installed `src/dsh/agent-plugin.js`, so the copied Preset does not resolve back into the source checkout;
+  - child spawn error/non-zero exit propagation, idempotent `close()`, and signal-driven shutdown.
+
+- [ ] Run the new tests and confirm RED:
+
+```bash
+node --test test/dsh-composition.test.js test/dsh-launcher.test.js
+```
+
+- [ ] Build `dsh/agent-presets/spider/agent.cordis.yml` from the installed DSH `code` Preset structure, keeping only approved rows. Add:
+
+```yaml
+- id: tool-cordis
+  name: '@deepseek-ai/dsh-tool-cordis'
+
+- id: deepspider-agent
+  name: !!js process.env.DEEPSPIDER_AGENT_PLUGIN_PATH
+```
+
+Keep the compaction group isolation from DSH's shipped Preset. Do not copy DSH plugin implementations.
+
+- [ ] Write the package patch as the minimal overlay:
+
+```yaml
+- id: deepspider-host
+  name: !!js process.env.DEEPSPIDER_HOST_PLUGIN_PATH
+
+- id: agent-presets
+  config:
+    default: spider
+```
+
+Both plugin-path environment variables are computed by the launcher from the installed package root; neither YAML file contains a source-checkout path.
+
+- [ ] Implement the launcher. Determine DSH home as `env.DSH_HOME || path.join(os.homedir(), '.dsh')`; copy the package Preset and static `skills/deepspider` directory before every spawn. No merge, backup, migration, or old-layout detection.
+
+- [ ] Replace the `agent` branch in `bin/cli.js`:
+
+  - accept only `--port <number>` and `--verbose`;
+  - handle `agent --help` without starting DSH;
+  - remove `--model` and the `config` command;
+  - on SIGINT/SIGTERM call launcher `close()` and await the child/Host cleanup;
+  - preserve conventional exit codes 130/143 for signals and the child exit code otherwise.
+
+- [ ] Delete the OpenCode runtime, sandbox, TUI, plugin, Agent markdown, config command, and all tests that exist solely for them. Remove `gray-matter`, `@opencode-ai/plugin`, `@opencode-ai/sdk`, `opencode-ai`, and direct `@deepseek-ai/schemastery` from `package.json`; regenerate `pnpm-lock.yaml`.
+
+- [ ] Remove `allowBuilds.opencode-ai` from `pnpm-workspace.yaml`; retain only the `@deepseek-ai/*` minimum-release-age exclusion needed by the current DSH closure.
+
+- [ ] Change `package.json#files` to include `dsh/` and remove `agents/` and `plugins/`. Keep `src/`, `bin/`, `skills/`, both READMEs, and runtime requirement files.
+
+- [ ] Extend the packed CLI smoke to install the tarball with scripts disabled and assert:
+
+  - `--version`, `--help`, and `agent --help` work from the installed tree;
+  - the installed launcher resolves the packaged DSH bin, patch, Preset, Agent plugin, and Skill;
+  - no path points back to the repository checkout;
+  - the smoke does not leave a permanent DSH Web process running.
+
+- [ ] Run focused, packed, and manifest checks:
+
+```bash
+node --test test/dsh-composition.test.js test/dsh-launcher.test.js test/dependencies.test.js
+pnpm install --frozen-lockfile --ignore-scripts
+pnpm test
 pnpm lint
+pnpm smoke:pack
+npm pack --dry-run --json
 git diff --check
 ```
 
-Expected: all exit 0, the child exits after cleanup, and no OpenCode process remains.
+Expected: all exit 0; archive entries include `dsh/`, `src/dsh/`, and `skills/deepspider/`.
 
-- [ ] Confirm source and manifest removal:
+- [ ] Confirm OpenCode and removed capability residue is gone from the release surface:
 
 ```bash
-rg -n -i "opencode|@opencode-ai" package.json pnpm-lock.yaml bin src test scripts dsh plugins agents || true
+rg -n -i "opencode|@opencode-ai|evolve_skill" package.json pnpm-lock.yaml pnpm-workspace.yaml bin src test scripts dsh agents plugins || true
 ```
 
-Expected: no output. Remove now-empty `plugins/` or `agents/` directories if applicable.
+Expected: no output. Remove empty `agents/` or `plugins/` directories if they remain.
 
 - [ ] Commit:
 
 ```bash
 git add -A
-git commit -m "feat(agent): replace OpenCode with DSH"
+git commit -m "feat(agent): replace OpenCode with native DSH"
 ```
 
 ---
 
-## Task 13: Update the Product Documentation and Continuous DSH Refresh
+## Task 5: Update Chinese/English Docs and Continuous DSH Refresh
 
 **Files:**
 
@@ -760,146 +567,180 @@ git commit -m "feat(agent): replace OpenCode with DSH"
 - Modify: `.github/workflows/publish.yml`
 - Modify: `test/dependencies.test.js`
 - Modify: `test/dsh-composition.test.js`
-- Modify: `scripts/smoke-packed-cli.mjs`
 
-**Interfaces:**
+**Documentation contract:**
 
-- Both READMEs describe the same current commands, DSH Web flow, multiple Session model, Node 24 prerequisite, MCP external-adapter role, and direct-request reverse-engineering outcome.
-- Scheduled CI refreshes `latest` DSH dependencies in an ephemeral checkout and runs acceptance; it opens no automatic repository mutation or unreviewed publish.
-- Release CI runs unit, lint, DSH integration, browser/MCP integration, and packed-install smoke on Node 24.
+- Preserve the previous README's reverse-engineering product narrative and eight-stage method.
+- Replace OpenCode TUI/configuration with DSH Web, multiple Sessions, Goals, Code Mode, Cordis, and DSH-owned model/credential settings.
+- Explain that browser actions are evidence collection and the expected outcome is a direct request implementation.
+- Document only current CLI commands: `agent [--port] [--verbose]`, `mcp`, `fetch`, `update`, `--version`, and `--help`.
+- State Node.js `>=24.0.0`, pnpm `11.21.0` for development, Patchright Chromium, Session artifact layout, Ctrl+C cleanup, MCP's external-adapter role, and the privileged nature of Cordis dynamic tools.
+- Do not add a Camoufox disclaimer sentence; simply document the supported Patchright runtime.
+- Do not advertise disabled Plan Mode, Subagents, Workflows, Ralph, `web_fetch`, or evolve behavior as current capabilities.
 
-- [ ] Extend dependency/composition tests to assert the public documentation command set and the absence of OpenCode terminology.
+- [ ] Extend dependency/composition tests to check both READMEs for the current command set and product terms, and to reject OpenCode/config/TUI instructions.
 
-- [ ] Run the focused tests and confirm RED against the old READMEs/workflow:
+- [ ] Run the focused tests and confirm RED:
 
 ```bash
 node --test test/dependencies.test.js test/dsh-composition.test.js
 ```
 
-- [ ] Rewrite the Chinese and English installation/startup/configuration sections in parallel. Preserve the existing product narrative and eight-stage reverse-engineering positioning; remove stale settings, TUI, Agent/Skill injection, and OpenCode instructions.
+- [ ] Rewrite both READMEs in parallel. Keep section order and narrative comparable across languages; update examples, architecture tree, runtime paths, development commands, and security notes to match current code.
 
-- [ ] Document only these retained CLI surfaces: `agent [--port] [--verbose]`, `mcp`, `fetch`, `update`, `--version`, and `--help`. Model/provider/credential setup belongs to DSH Web.
-
-- [ ] Add a scheduled/manual `dsh-refresh.yml` that installs Node 24, updates the four DSH packages to current `latest` in the ephemeral job, and runs unit, lint, composition, DSH, browser/MCP, and pack acceptance. It reports breakage through CI only; it does not commit lockfile changes.
-
-The refresh step is:
+- [ ] Add `.github/workflows/dsh-refresh.yml` with scheduled and manual triggers. In an ephemeral checkout on Node 24/pnpm 11.21.0:
 
 ```bash
-pnpm update --latest @deepseek-ai/dsh @deepseek-ai/cordis @deepseek-ai/dsh-tools @deepseek-ai/schemastery
+pnpm update @deepseek-ai/dsh@latest @deepseek-ai/cordis@latest @deepseek-ai/dsh-tools@next
+pnpm test
+pnpm lint
+pnpm test:integration
+pnpm smoke:pack
 ```
 
-- [ ] Expand publish CI to run the same checked-in-lock acceptance before npm publish.
+The workflow reports compatibility drift only. It does not commit, push, open a PR, or publish.
 
-- [ ] Run documentation, packaging, and workflow checks:
+- [ ] Expand `.github/workflows/publish.yml` so the checked-in lockfile gate runs unit tests, lint, full integration, and packed-install smoke before publish. Keep Node 24 and pnpm 11.21.0 in both jobs.
+
+- [ ] Run documentation, workflow, and package checks:
 
 ```bash
 node --test test/dependencies.test.js test/dsh-composition.test.js
+pnpm lint
 pnpm smoke:pack
 npm pack --dry-run --json
-pnpm lint
 git diff --check
 ```
 
-Expected: all exit 0 and both READMEs are listed in the archive.
+Expected: all exit 0; both READMEs and DSH assets are present in the archive.
 
 - [ ] Commit:
 
 ```bash
-git add README.md README_EN.md .github/workflows/dsh-refresh.yml .github/workflows/publish.yml test/dependencies.test.js test/dsh-composition.test.js scripts/smoke-packed-cli.mjs
-git commit -m "docs: document native DSH workflow"
+git add README.md README_EN.md .github/workflows/dsh-refresh.yml .github/workflows/publish.yml test/dependencies.test.js test/dsh-composition.test.js
+git commit -m "docs: document the native DSH workflow"
 ```
 
 ---
 
-## Task 14: Prove Multi-Session Isolation and Release Readiness
+## Task 6: Prove Real DSH Multi-Session and Browser Shutdown
 
 **Files:**
 
+- Create: `test/fixtures/dsh/host-probe-plugin.js`
+- Create: `test/integration/dsh-smoke.test.js`
 - Create: `test/integration/dsh-multisession.test.js`
-- Modify: `test/integration/dsh-smoke.test.js`
+- Modify: `src/runtime/RuntimeManager.js`
+- Modify: `test/runtime-manager.test.js`
 - Modify: `test/integration/browser-mcp-smoke.test.js`
-- Modify: `scripts/run-unit-tests.mjs`
 - Modify: `scripts/smoke-packed-cli.mjs`
+- Modify: `package.json`
 
 **Acceptance scenarios:**
 
-1. Two DSH Sessions receive distinct Runtime instances, browser processes/contexts, user-data roots, DataStores, selected Frames, Network/WebSocket buffers, target scripts, rebuild roots, and artifact hashes.
-2. Same-Session tool calls serialize; different Sessions overlap in time.
-3. Disposing Session A closes only browser A. Session B remains usable.
-4. Process SIGTERM aborts active work, closes both browsers, and exits with bounded latency.
-5. Resuming a Session reconstructs its latest checkpoint and lazily creates a fresh Runtime/browser.
-6. Native DSH and MCP invoke the same catalog definitions.
-7. Goals and `web_search` exist; excluded capabilities do not.
-8. A real immutable-target probe/Hook/verify flow writes evidence only under its Session root.
+1. Real DSH Web boots through `deepspider agent --port 0` with the Spider Preset selected.
+2. The native DSH registry sees 51 DeepSpider tools, while Code Mode presents `run_code` and its generated SDK.
+3. Goals, Todo, Cordis, `web_search`, Bash/files/search/jobs/Ask User/Skills/compaction exist; disabled capabilities do not.
+4. Two real DSH Agents/Sessions produce distinct Runtime objects, DataStores, browser-data roots, rebuild roots, selected state, and Patchright browser processes.
+5. Same-Session operations serialize; two Session operations overlap. This is checked through `RuntimeManager`, not model timing.
+6. Disposing Session A removes and closes only Runtime A; Session B can still execute `get_page_info` through native Code Mode.
+7. Resuming A's persisted DSH Session creates a fresh Runtime/browser under the same hashed Session root rather than restoring browser memory.
+8. SIGTERM to `deepspider agent` triggers Host `closeAll()`. Every exact Chromium PID recorded after a native `navigate_page` call exits before the CLI exits.
+9. MCP still reaches the same 51 Catalog definitions and exits without open handles.
 
-- [ ] Add `dsh-multisession.test.js` using real DSH Web plus controlled local target pages. Record child PIDs and temporary roots so cleanup assertions are exact.
+- [ ] Build `test/fixtures/dsh/host-probe-plugin.js` as a test-only Host plugin mounted from a temporary `$DSH_HOME/cordis.patch.yml`. It injects public `agents`, `tools`, and `deepSpiderRuntimeManager` services, creates two top-level Agents with `meta.agentPreset: 'spider'`, and drives native Code Mode through:
 
-- [ ] Run the new integration test and confirm RED before completing missing lifecycle behavior:
+```js
+ctx.tools.execute({
+  callId,
+  name: 'run_code',
+  arguments: {
+    description: 'Open the local acceptance page',
+    code: `return await tools.navigate_page({ url: ${JSON.stringify(url)} })`,
+  },
+  agent,
+  signal,
+})
+```
+
+The fixture writes small JSON checkpoints to a path supplied by `DEEPSPIDER_TEST_PROBE_OUTPUT`; it never enters the published package.
+
+- [ ] Add `dsh-smoke.test.js` to:
+
+  - create a fresh HOME/DSH_HOME and local HTTP target;
+  - launch the real installed `bin/cli.js agent --port 0`;
+  - wait for the printed `dsh web:` URL and HTTP readiness;
+  - assert the probe reports `spider`, 51 native definitions, Code Mode `run_code`, and the approved/disabled capability set;
+  - terminate and assert bounded clean exit.
+
+- [ ] Add `dsh-multisession.test.js` to let the probe create A and B, navigate both to the local target, and report their Runtime/Session path identities. Assert every isolation field listed above.
+
+- [ ] In the same test, dispose A, wait until the manager no longer contains A, and call `get_page_info` for B through another `run_code` execution. Resume A from persistence and prove its new Runtime object differs while `paths.root` is unchanged.
+
+- [ ] Add one same-ID disposal barrier to `RuntimeManager`: retain the in-flight close promise by Session ID, make a new `get()`/`run()` for that ID await the old close before constructing its replacement Runtime, and clear the barrier in `finally`. Add a focused regression showing a resumed Session cannot open the same `browser-data` directory until its previous browser has closed; unrelated IDs still proceed immediately.
+
+- [ ] After at least one real native `navigate_page`, snapshot the exact descendant Chromium PIDs of the `deepspider agent` child. Send SIGTERM to the CLI, wait for its exit, then poll only those recorded PIDs and assert all are gone. Do not use a broad process kill.
+
+- [ ] Run the new integrations and confirm RED before changing production behavior:
 
 ```bash
+node --test test/integration/dsh-smoke.test.js
 node --test test/integration/dsh-multisession.test.js
+node --test test/runtime-manager.test.js
 ```
 
-- [ ] Make only the minimal production adjustments exposed by the acceptance test. Do not weaken isolation assertions, serialize different Sessions globally, or add retries that conceal lifecycle failures.
+- [ ] Make only minimal production fixes exposed by those tests. Do not serialize different Sessions globally, weaken PID assertions, add arbitrary sleeps in place of readiness, or add a second lifecycle manager.
 
-- [ ] Run the full unit suite:
+- [ ] Update `package.json#scripts.test:integration` only if needed so Node discovers all integration files explicitly and exits with no open handles. Keep unit discovery separate.
 
-```bash
-pnpm test
-```
-
-Expected: all discovered top-level unit suites pass and no integration file is run by the unit runner.
-
-- [ ] Run the full integration suite:
-
-```bash
-pnpm test:integration
-```
-
-Expected: DSH startup, multi-session, and browser/MCP smokes all pass and the Node process exits without open handles.
-
-- [ ] Run release checks from the checked-in lockfile:
+- [ ] Run the complete acceptance matrix:
 
 ```bash
 pnpm install --frozen-lockfile --ignore-scripts
+pnpm test
 pnpm lint
+pnpm test:integration
 pnpm smoke:pack
 npm pack --dry-run --json
 git diff --check
 ```
 
-Expected: all exit 0; archive contents include `src/dsh`, `src/runtime`, `src/tools`, `src/adapters`, `dsh`, `skills`, and both READMEs.
+Expected: every command exits 0. Browser integration may require running outside a restricted macOS sandbox because Chromium's Mach port bootstrap is denied there; do not weaken the test for that environment error.
 
-- [ ] Audit forbidden residuals and process leaks:
+- [ ] Audit release residue and leaks:
 
 ```bash
-rg -n -i "opencode|@opencode-ai|latest task|most recently modified" package.json pnpm-lock.yaml bin src test scripts dsh README.md README_EN.md .github || true
-ps -ax -o pid=,command= | rg "deepspider|@deepseek-ai/dsh|patchright|Chromium" || true
+rg -n -i "opencode|@opencode-ai|evolve_skill|deepspider/checkpoint|latest task|most recently modified" package.json pnpm-lock.yaml pnpm-workspace.yaml bin src test scripts dsh README.md README_EN.md .github || true
+ps -ax -o pid=,ppid=,command= | rg "deepspider|@deepseek-ai/dsh|patchright|Chromium" || true
 ```
 
-Expected: no forbidden source/documentation matches and no process created by the test run remains.
+Expected: no forbidden source/documentation matches and no process created by the acceptance run remains.
 
-- [ ] Confirm repository state contains only intended changes:
+- [ ] Confirm repository scope:
 
 ```bash
 git status --short
-git diff --stat 3690fab..HEAD
+git diff --stat 3e31517..HEAD
 ```
 
-- [ ] Commit the final acceptance additions:
+- [ ] Commit:
 
 ```bash
-git add test/integration/dsh-multisession.test.js test/integration/dsh-smoke.test.js test/integration/browser-mcp-smoke.test.js scripts/run-unit-tests.mjs scripts/smoke-packed-cli.mjs
-git commit -m "test: verify DSH multi-session lifecycle"
+git add src/runtime/RuntimeManager.js test/runtime-manager.test.js test/fixtures/dsh/host-probe-plugin.js test/integration/dsh-smoke.test.js test/integration/dsh-multisession.test.js test/integration/browser-mcp-smoke.test.js scripts/smoke-packed-cli.mjs package.json
+git commit -m "test: verify native DSH session lifecycle"
 ```
 
 ## Final Review Gate
 
-- [ ] Re-read the design spec and map every acceptance criterion to a passing test or explicit release check.
-- [ ] Confirm `RuntimeManager` is the only process-wide DeepSpider state and each map entry is keyed by exact Agent ID.
-- [ ] Confirm DSH native tools and MCP share the exact catalog definitions.
-- [ ] Confirm Agent disposal and process disposal are both wired and tested.
-- [ ] Confirm Node `>=24.0.0` appears consistently in manifest, CI, READMEs, and packed installation behavior.
-- [ ] Confirm all DSH direct dependencies remain declared as `latest` while `pnpm-lock.yaml` records the tested versions.
-- [ ] Confirm no legacy compatibility layer, rare-edge-case framework, or vendor/site-specific routing was introduced.
-- [ ] Request a final code review before pushing `main`.
+- [ ] Re-read the design and map every goal/non-goal to a passing test or explicit release check.
+- [ ] Confirm `RuntimeManager` is the only process-wide DeepSpider owner registry and every entry is keyed by exact `agent.id`.
+- [ ] Confirm no BrowserClient, Page, Frame, CDP session, DataStore, debugger state, capture buffer, selected target, or rebuild task is module-global.
+- [ ] Confirm DSH and MCP import the exact same `deepSpiderCatalog` and its count is 51.
+- [ ] Confirm DSH Agent disposal starts exact Runtime cleanup and Host disposal awaits all in-flight/per-Session cleanup.
+- [ ] Confirm the launcher resolves the real DSH bin, synchronizes only package-managed Preset/Skill directories, starts in YOLO mode, and awaits exit cleanup.
+- [ ] Confirm target immutability, trace/timeout evidence, dynamic-source integrity, truncated-script rejection, and stack concealment tests remain green.
+- [ ] Confirm Node `>=24.0.0`, pnpm `11.21.0`, `latest` DSH/Cordis, and `next` dsh-tools appear consistently in manifest, CI, docs, and packed installation behavior.
+- [ ] Confirm there is no direct Schemastery dependency, OpenCode code/config/documentation, custom checkpoint, `evolve_skill`, Camoufox layer, or vendor/site-specific route.
+- [ ] Confirm the scheduled refresh only reports drift and never mutates the repository or publishes.
+- [ ] Run `pnpm test`, `pnpm lint`, `pnpm test:integration`, and `pnpm smoke:pack` once more after final review.
+- [ ] Request final code review before pushing `main`.
