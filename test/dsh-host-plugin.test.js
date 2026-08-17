@@ -58,9 +58,11 @@ test('Host plugin provides one process-wide RuntimeManager without model-facing 
 test('Host plugin accepts a test manager and disposes the exact Agent payload', async () => {
   const ctx = hostContext()
   const calls = []
+  let runtimeClosed = false
   const manager = {
     async disposeAgent(agent, reason) {
       calls.push(['disposeAgent', agent, reason])
+      if (agent.id === 'agent-1') runtimeClosed = true
     },
     async closeAll(reason) {
       calls.push(['closeAll', reason])
@@ -74,8 +76,9 @@ test('Host plugin accepts a test manager and disposes the exact Agent payload', 
     manager,
   )
 
-  await ctx.listeners.get('agent/disposed')(agent)
+  await ctx.listeners.get('agent/disposed')({ agent })
   assert.deepEqual(calls[0].slice(0, 2), ['disposeAgent', agent])
+  assert.equal(runtimeClosed, true)
 })
 
 test('Host plugin effect disposer awaits RuntimeManager closeAll', async () => {
