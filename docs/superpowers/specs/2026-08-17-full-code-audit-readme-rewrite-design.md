@@ -154,7 +154,6 @@ The bridge supports:
 - element and iframe selection;
 - text editing and submission;
 - chat with the owning DSH Agent;
-- choices and confirmations;
 - Agent status and response rendering.
 
 `BrowserClient.onMessage` is connected to a Session-scoped bridge, and Agent output is sent back to the same page. Page switch and Runtime close remove listeners and UI state.
