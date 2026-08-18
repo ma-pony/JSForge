@@ -515,7 +515,7 @@ export class SessionArtifactStore {
   }
 
   /**
-   * 保存脚本源码（带去重，带锁防止竞态条件）
+   * 保存脚本捕获。内容文件可复用，但每次捕获都是独立且不可变的 occurrence。
    */
   async saveScript(data) {
     const {
@@ -537,61 +537,48 @@ export class SessionArtifactStore {
       this.siteIndexCache.delete(site);
       const index = await this.getSiteIndex(site);
 
-      // 检查是否已存在相同内容
-      const existing = index.scripts.find(s => s.hash === hash);
-      if (existing) {
-        existing.timestamp = timestamp || Date.now();
-        existing.sessionId = this.getSessionId();
-        Object.assign(existing, {
-          pageUrl, sourceHash, cdpScriptId, executionContextId,
-          parentScriptId, parentUrl, startLine, startColumn,
-        });
-        await this.saveSiteIndex(site);
-        result = { id: existing.id, site, deduplicated: true };
-      } else {
-        const siteDir = this.getSiteDir(site);
-        const scriptsDir = join(siteDir, 'scripts');
-        ensureSecureDir(scriptsDir);
+      const siteDir = this.getSiteDir(site);
+      const scriptsDir = join(siteDir, 'scripts');
+      ensureSecureDir(scriptsDir);
 
-        const readableName = getReadableFilename(url, 'script');
-        const seq = String(index.scripts.length).padStart(3, '0');
-        const id = `${readableName}_${seq}`;
-        const file = join(scriptsDir, `${id}.js`);
-
+      const readableName = getReadableFilename(url, 'script');
+      const seq = String(index.scripts.length).padStart(3, '0');
+      const id = `${readableName}_${seq}`;
+      const file = join(scriptsDir, `${readableName}_${hash}.js`);
+      const sourceDeduplicated = existsSync(file);
+      if (!sourceDeduplicated) {
         await writeFile(file, source || '', { mode: 0o600 });
-
-        const entry = {
-          id, url, type,
-          timestamp: timestamp || Date.now(),
-          file, size: source?.length || 0,
-          hash,
-          pageUrl,
-          sourceHash,
-          cdpScriptId,
-          executionContextId,
-          parentScriptId,
-          parentUrl,
-          startLine,
-          startColumn,
-          sessionId: this.getSessionId()
-        };
-        if (truncated) entry.truncated = true;
-        index.scripts.push(entry);
-
-        // 写入搜索索引：url + source 前 1000 字符，小写
-        const keywords = `${url} ${(source || '').slice(0, 1000)}`.toLowerCase();
-        getSiteSearchIndex(this.searchIndex, site).scripts.set(id, keywords);
-
-        await this.saveSiteIndex(site);
-        result = { id, site };
       }
+
+      const entry = {
+        id, url, type,
+        timestamp: timestamp || Date.now(),
+        file, size: source?.length || 0,
+        hash,
+        pageUrl,
+        sourceHash,
+        cdpScriptId,
+        executionContextId,
+        parentScriptId,
+        parentUrl,
+        startLine,
+        startColumn,
+        sessionId: this.getSessionId()
+      };
+      if (truncated) entry.truncated = true;
+      index.scripts.push(entry);
+
+      // 写入搜索索引：url + source 前 1000 字符，小写
+      const keywords = `${url} ${(source || '').slice(0, 1000)}`.toLowerCase();
+      getSiteSearchIndex(this.searchIndex, site).scripts.set(id, keywords);
+
+      await this.saveSiteIndex(site);
+      result = { id, site, sourceDeduplicated };
     } finally {
       releaseLock();
     }
 
-    if (!result.deduplicated) {
-      await this.updateSiteStats(site);
-    }
+    await this.updateSiteStats(site);
     this.maybeCleanup();
 
     return result;
@@ -922,8 +909,11 @@ export class SessionArtifactStore {
         await rm(r.file, { force: true }).catch(() => {});
         cleaned++;
       }
+      const retainedScripts = index.scripts.filter(s => now - s.timestamp <= maxAge);
       for (const sc of expiredScripts) {
-        await rm(sc.file, { force: true }).catch(() => {});
+        if (!retainedScripts.some((entry) => entry.file === sc.file)) {
+          await rm(sc.file, { force: true }).catch(() => {});
+        }
         cleaned++;
       }
 
@@ -973,15 +963,18 @@ export class SessionArtifactStore {
 
       while (totalSize > maxSize && allItems.length > 0) {
         const item = allItems.shift();
-        await rm(item.file, { force: true }).catch(() => {});
         totalSize -= item.size || 0;
         cleaned++;
 
         if (item.type === 'response') {
+          await rm(item.file, { force: true }).catch(() => {});
           index.responses = index.responses.filter(r => r.id !== item.id);
           if (siteIdx) siteIdx.responses.delete(item.id);
         } else {
           index.scripts = index.scripts.filter(s => s.id !== item.id);
+          if (!index.scripts.some((entry) => entry.file === item.file)) {
+            await rm(item.file, { force: true }).catch(() => {});
+          }
           if (siteIdx) siteIdx.scripts.delete(item.id);
         }
       }

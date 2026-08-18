@@ -15,6 +15,8 @@ const { jsdomFromUrl } = require('sdenv')
 const contract = JSON.parse(await readFile(new URL('./contract.json', import.meta.url), 'utf8'))
 const recipe = JSON.parse(await readFile(new URL('./recipe.json', import.meta.url), 'utf8'))
 const blockedHeaders = new Set(['cookie', 'host', 'connection', 'content-length', 'accept-encoding', 'user-agent'])
+const cookieName = /^[!#$%&'*+\\-.^_\`|~0-9A-Za-z]+$/
+const cookieValue = /^[\\x21-\\x3A\\x3C-\\x7E]*$/
 
 function titleOf(html) {
   const match = String(html || '').match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i)
@@ -86,7 +88,9 @@ try {
   })
   await exit.promise
   const cookies = cookieOutputs(dom.cookieJar.getCookieStringSync(contract.entryUrl))
-  const anchorPresent = !contract.selector || cookies.some(({ name }) => name === contract.selector)
+    .filter(({ name, value }) => cookieName.test(name) && cookieValue.test(value))
+  const anchorPresent = cookies.length > 0
+    && (!contract.selector || cookies.some(({ name }) => name === contract.selector))
   const headers = Object.fromEntries(Object.entries(contract.request.headers || {}).filter(([name]) => !blockedHeaders.has(name.toLowerCase())))
   headers.Cookie = cookies.map(({ name, value }) => \`\${name}=\${value}\`).join('; ')
   client = await initCycleTLS({ autoExit: false, timeout: recipe.timeoutMs })
@@ -133,6 +137,13 @@ export async function exportSolver({ sessionId, contract, recipe, validation, so
   const safeContract = validateOutputContract(contract)
   const safeRecipe = validateRuntimeRecipe(recipe)
   if (!validation || typeof validation !== 'object') throw new TypeError('validation must be provided')
+  const validatedNames = Array.isArray(validation.generatedCookieNames) ? validation.generatedCookieNames : []
+  const cookieAnchored = validation.accepted === true
+    && validation.level === 'reproduced'
+    && Number.isInteger(validation.generatedCookieCount)
+    && validation.generatedCookieCount > 0
+    && (!safeContract.selector || validatedNames.includes(safeContract.selector))
+  if (!cookieAnchored) throw new TypeError('validation must be reproduced from a legal generated Cookie')
   const directory = resolve(solverDir)
   await mkdir(directory, { recursive: true, mode: 0o700 })
   await Promise.all([

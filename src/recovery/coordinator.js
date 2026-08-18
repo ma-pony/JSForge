@@ -52,6 +52,27 @@ function evidencePair(graph, url) {
   throw new Error(`Current Session does not contain challenge and accepted Document evidence for ${url}`)
 }
 
+function evidenceIdentity(node) {
+  return {
+    id: node.id,
+    bodyHash: node.bodyHash,
+  }
+}
+
+function evidenceIdentityPair(challenge, accepted) {
+  return {
+    challenge: evidenceIdentity(challenge),
+    accepted: evidenceIdentity(accepted),
+  }
+}
+
+function sameEvidence(left, right) {
+  return left?.challenge?.id === right.challenge.id
+    && left?.challenge?.bodyHash === right.challenge.bodyHash
+    && left?.accepted?.id === right.accepted.id
+    && left?.accepted?.bodyHash === right.accepted.bodyHash
+}
+
 async function artifactJson(store, entry) {
   const stored = await store.getArtifact(entry.id)
   if (!stored?.content) return null
@@ -62,20 +83,23 @@ async function artifactJson(store, entry) {
   }
 }
 
-async function loadContract(store, url, outputKind, outputSelector) {
+async function loadContracts(store, url, outputKind, outputSelector, evidence) {
   const entries = await store.listArtifacts({ kind: 'output-contract' })
+  let previous = null
   for (const entry of entries.toReversed()) {
     if (entry.metadata?.url !== url || entry.metadata?.outputKind !== outputKind) continue
     if ((entry.metadata?.outputSelector ?? null) !== outputSelector) continue
     const value = await artifactJson(store, entry)
     if (!value) continue
     try {
-      return { artifact: entry, value: validateOutputContract(value) }
+      const record = { artifact: entry, value: validateOutputContract(value) }
+      if (sameEvidence(entry.metadata?.evidence, evidence)) return { current: record, previous }
+      previous ||= record
     } catch {
       // A stale artifact cannot become the current recovery contract.
     }
   }
-  return null
+  return { current: null, previous }
 }
 
 async function loadRecipe(store, contractArtifactId) {
@@ -187,6 +211,7 @@ export class RecoveryCoordinator {
 
     const graph = await buildArtifactGraph({ store })
     const { challenge, accepted } = evidencePair(graph, targetUrl)
+    const evidence = evidenceIdentityPair(challenge, accepted)
     const graphArtifact = await store.saveArtifact({
       kind: 'artifact-graph',
       origin: 'derived',
@@ -196,7 +221,8 @@ export class RecoveryCoordinator {
       metadata: { url: targetUrl, challengeId: challenge.id, acceptedId: accepted.id },
     })
 
-    let contractRecord = await loadContract(store, targetUrl, outputKind, outputSelector)
+    const loadedContracts = await loadContracts(store, targetUrl, outputKind, outputSelector, evidence)
+    let contractRecord = loadedContracts.current
     if (!contractRecord) {
       const contract = createOutputContract({
         kind: outputKind,
@@ -218,7 +244,7 @@ export class RecoveryCoordinator {
         sourceId: graphArtifact.id,
         url: targetUrl,
         content: contract,
-        metadata: { url: targetUrl, outputKind, outputSelector },
+        metadata: { url: targetUrl, outputKind, outputSelector, evidence },
       })
       contractRecord = { artifact, value: contract }
     }
@@ -227,14 +253,21 @@ export class RecoveryCoordinator {
 
     let recipeRecord = await loadRecipe(store, contractRecord.artifact.id)
     if (!recipeRecord) {
-      const recipe = createRuntimeRecipe()
+      const previousRecipe = loadedContracts.previous
+        ? await loadRecipe(store, loadedContracts.previous.artifact.id)
+        : null
+      const recipe = previousRecipe?.value || createRuntimeRecipe()
       const artifact = await store.saveArtifact({
         kind: 'runtime-recipe',
         origin: 'derived',
         sourceId: contractRecord.artifact.id,
         url: targetUrl,
         content: recipe,
-        metadata: { contractHash },
+        metadata: {
+          contractHash,
+          previousContractId: loadedContracts.previous?.artifact.id || null,
+          previousRecipeId: previousRecipe?.artifact.id || null,
+        },
       })
       recipeRecord = { artifact, value: recipe }
     }

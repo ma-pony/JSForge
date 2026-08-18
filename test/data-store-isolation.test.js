@@ -157,6 +157,48 @@ test('SessionArtifactStore scans complete response and script files after a pref
   assert.match(matches[0].context, /MixedCaseScriptNeedle/)
 })
 
+test('repeated script captures keep immutable occurrences while sharing one source blob', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-script-occurrences-'))
+  const store = new SessionArtifactStore({ root: path.join(temporary, 'evidence') })
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+  const sessionId = store.startSession()
+  const source = 'window.dynamicRepeat = true'
+  const now = Date.now()
+  const first = await store.saveScript({
+    url: 'https://repeat.test/app.js', type: 'external', source,
+    timestamp: now, pageUrl: 'https://repeat.test/first', cdpScriptId: 'script-1',
+    sourceHash: 'source-one', executionContextId: 1, startLine: 10, startColumn: 11,
+    parentScriptId: 'parent-1', parentUrl: 'https://repeat.test/parent-1.js',
+  })
+  const firstIndex = await store.getSiteIndex('repeat.test')
+  const firstOccurrence = JSON.parse(JSON.stringify(firstIndex.scripts[0]))
+  const second = await store.saveScript({
+    url: 'https://repeat.test/app.js', type: 'dynamic', source,
+    timestamp: now + 1, pageUrl: 'https://repeat.test/second', cdpScriptId: 'script-2',
+    sourceHash: 'source-two', executionContextId: 2, startLine: 20, startColumn: 21,
+    parentScriptId: 'parent-2', parentUrl: 'https://repeat.test/parent-2.js',
+  })
+
+  const index = await store.getSiteIndex('repeat.test')
+  assert.notEqual(first.id, second.id)
+  assert.equal(index.scripts.length, 2)
+  assert.deepEqual(index.scripts[0], firstOccurrence)
+  assert.equal(index.scripts[0].sessionId, sessionId)
+  assert.equal(index.scripts[1].sessionId, sessionId)
+  assert.equal(index.scripts[0].parentScriptId, 'parent-1')
+  assert.equal(index.scripts[1].parentScriptId, 'parent-2')
+  assert.equal(index.scripts[0].file, index.scripts[1].file)
+  assert.equal(await store.getScript('repeat.test', first.id), source)
+  assert.equal(await store.getScript('repeat.test', second.id), source)
+  assert.equal((await store.searchInScripts('dynamicrepeat', 'repeat.test')).length, 2)
+  assert.equal(store.getSiteList()[0].scriptCount, 2)
+
+  const graph = await buildArtifactGraph({ store, sessionId })
+  const scriptNodes = graph.nodes.filter(({ kind }) => kind === 'script')
+  assert.equal(scriptNodes.length, 2)
+  assert.deepEqual(scriptNodes.map(({ parentScriptId }) => parentScriptId), ['parent-1', 'parent-2'])
+})
+
 test('replay lookup matches the exact request only inside the current Session', async (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-data-store-replay-'))
   const store = new SessionArtifactStore({ root: path.join(temporary, 'data') })

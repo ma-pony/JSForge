@@ -136,3 +136,62 @@ test('saved run and generated output bind canonical runtime identity to upstream
   assert.equal(changedRun.metadata.identity.recipeHash, hashRecipe(changedRecipe))
   assert.equal('identity' in firstResult.attempts[0], false)
 })
+
+test('fresh evidence creates a new Contract and derives the edited Recipe onto its identity', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-contract-freshness-'))
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+  const store = new SessionArtifactStore({ root: path.join(temporary, 'evidence') })
+  store.startSession()
+  const capturePair = async ({ challengeTitle, acceptedTitle, header, timestamp }) => {
+    await store.saveResponse({
+      url: TARGET_URL, pageUrl: TARGET_URL, method: 'GET', resourceType: 'Document', status: 412,
+      requestHeaders: { 'x-round': header }, responseBody: `<title>${challengeTitle}</title>`, timestamp,
+    })
+    await store.saveResponse({
+      url: TARGET_URL, pageUrl: TARGET_URL, method: 'GET', resourceType: 'Document', status: 200,
+      requestHeaders: { 'x-round': header }, responseBody: `<title>${acceptedTitle}</title>`, timestamp: timestamp + 1,
+    })
+  }
+  const now = Date.now()
+  await capturePair({ challengeTitle: 'Challenge One', acceptedTitle: 'Accepted One', header: 'one', timestamp: now })
+  const runtime = {
+    sessionId: 'freshness-session', paths: { solvers: path.join(temporary, 'solvers') }, dataStore: store,
+    getRecoveryRuntime() {
+      return { execute: async ({ runId }) => ({
+        type: 'result', runId, ok: false, engine: ENGINE, outputs: [], events: [], unknowns: [],
+        program: { executable: false },
+      }) }
+    },
+  }
+  const coordinator = new RecoveryCoordinator(runtime)
+  const first = await coordinator.recover({ url: TARGET_URL, outputKind: 'cookie', outputSelector: 'clearance' })
+  let artifacts = await store.listArtifacts()
+  const firstContract = artifactOf(artifacts, 'output-contract')
+  const firstRecipe = artifactOf(artifacts, 'runtime-recipe')
+  const editedRecipe = { ...first.recipe, userAgent: 'preserved-user-recipe' }
+  const editedRecipeArtifact = await store.saveArtifact({
+    kind: 'runtime-recipe', origin: 'derived', sourceId: firstContract.id, url: TARGET_URL,
+    content: editedRecipe, metadata: { contractHash: hashContract(first.contract) },
+  })
+
+  await capturePair({ challengeTitle: 'Challenge Two', acceptedTitle: 'Accepted Two', header: 'two', timestamp: now + 100 })
+  const second = await coordinator.recover({ url: TARGET_URL, outputKind: 'cookie', outputSelector: 'clearance' })
+  artifacts = await store.listArtifacts()
+  const secondContract = artifactOf(artifacts, 'output-contract')
+  const secondRecipe = artifactOf(artifacts, 'runtime-recipe')
+  const secondRun = await store.getArtifact(artifactOf(artifacts, 'runtime-run').id)
+
+  assert.notEqual(secondContract.id, firstContract.id)
+  assert.notEqual(secondRecipe.id, firstRecipe.id)
+  assert.equal(secondRecipe.sourceId, secondContract.id)
+  assert.equal(second.recipe.userAgent, editedRecipe.userAgent)
+  assert.equal(secondRecipe.metadata.previousContractId, firstContract.id)
+  assert.equal(secondRecipe.metadata.previousRecipeId, editedRecipeArtifact.id)
+  assert.equal(secondContract.sourceId, second.graphArtifactId)
+  assert.equal(secondContract.metadata.evidence.accepted.id.includes('response:'), true)
+  assert.equal(second.contract.success.title, 'Accepted Two')
+  assert.equal(second.contract.request.headers['x-round'], 'two')
+  assert.equal(secondRun.metadata.identity.upstream.contract.id, secondContract.id)
+  assert.equal(secondRun.metadata.identity.upstream.recipe.id, secondRecipe.id)
+  assert.equal(secondRun.metadata.identity.upstream.artifactGraph.id, second.graphArtifactId)
+})

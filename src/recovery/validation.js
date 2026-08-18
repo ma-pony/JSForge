@@ -3,6 +3,24 @@ import initCycleTLS from 'cycletls'
 const BLOCKED_HEADERS = new Set([
   'cookie', 'host', 'connection', 'content-length', 'accept-encoding', 'user-agent',
 ])
+const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+const COOKIE_VALUE = /^[\x21-\x3A\x3C-\x7E]*$/
+
+let cycleTlsInitialization = Promise.resolve()
+let cycleTlsPort = 9119
+
+function initializeCycleTLS(options) {
+  const initialization = cycleTlsInitialization.then(async () => {
+    try {
+      return await initCycleTLS({ ...options, port: cycleTlsPort })
+    } catch (error) {
+      cycleTlsPort += 1
+      throw error
+    }
+  })
+  cycleTlsInitialization = initialization.then(() => undefined, () => undefined)
+  return initialization
+}
 
 function titleOf(html) {
   const match = String(html || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i)
@@ -19,7 +37,17 @@ function outputIds(outputs) {
   return outputs.map((output) => output.artifactId || output.id).filter(Boolean)
 }
 
-function baseResult(contract, outputs) {
+function legalCookies(outputs) {
+  return outputs.filter((output) => (
+    output?.kind === 'cookie'
+    && typeof output.name === 'string'
+    && COOKIE_NAME.test(output.name)
+    && typeof output.value === 'string'
+    && COOKIE_VALUE.test(output.value)
+  ))
+}
+
+function baseResult(contract, outputs, cookies = legalCookies(outputs)) {
   return {
     level: 'observed',
     accepted: false,
@@ -28,6 +56,8 @@ function baseResult(contract, outputs) {
     title: null,
     expectedTitle: contract.success.title ?? null,
     outputArtifactIds: outputIds(outputs),
+    generatedCookieCount: cookies.length,
+    generatedCookieNames: cookies.map(({ name }) => name),
   }
 }
 
@@ -89,20 +119,26 @@ export async function validateGeneratedOutput({ contract, outputs, requestTempla
   if (!requestTemplate || typeof requestTemplate !== 'object') throw new TypeError('requestTemplate must be provided')
   if (signal?.aborted) throw signal.reason
 
-  const result = baseResult(contract, outputs)
+  const cookies = legalCookies(outputs)
+  const result = baseResult(contract, outputs, cookies)
   if (contract.kind !== 'cookie') {
     return failureResult(result, {
       kind: 'program', operation: 'validate-output-kind', path: contract.request.url,
       reason: `Unsupported validation output kind: ${contract.kind}`, action: 'inspect-program-behavior',
     })
   }
-  const cookies = outputs.filter((output) => output?.kind === 'cookie' && typeof output.name === 'string')
-  const anchorPresent = !contract.selector || cookies.some((cookie) => cookie.name === contract.selector)
+  const anchorPresent = cookies.length > 0
+    && (!contract.selector || cookies.some((cookie) => cookie.name === contract.selector))
+  if (!anchorPresent) {
+    return failureResult(result, {
+      kind: 'validation', operation: 'validate-generated-cookie', path: contract.request.url,
+      reason: cookies.length === 0 ? 'no-legal-generated-cookie' : 'generated-cookie-selector-mismatch',
+      action: 'inspect-generated-output',
+    })
+  }
 
   const headers = requestHeaders(requestTemplate.headers)
-  if (cookies.length > 0) {
-    headers.Cookie = cookies.map(({ name, value }) => `${name}=${String(value ?? '')}`).join('; ')
-  }
+  headers.Cookie = cookies.map(({ name, value }) => `${name}=${value}`).join('; ')
   let client
   let initialization
   let closed = false
@@ -113,7 +149,7 @@ export async function validateGeneratedOutput({ contract, outputs, requestTempla
     await client.exit().catch(() => {})
   }
   try {
-    initialization = Promise.resolve(initCycleTLS({ autoExit: false, timeout: requestTemplate.timeoutMs }))
+    initialization = initializeCycleTLS({ autoExit: false, timeout: requestTemplate.timeoutMs })
     client = await abortable(initialization, signal, async () => {
       const lateClient = await initialization.catch(() => null)
       if (lateClient) await lateClient.exit().catch(() => {})

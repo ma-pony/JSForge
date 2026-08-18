@@ -25,6 +25,7 @@ jobs:
 
       - name: Refresh DSH packages in this ephemeral checkout
         run: pnpm update @deepseek-ai/dsh@latest @deepseek-ai/dsh-host-apiproxy@next @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-tools@next --ignore-scripts
+      - run: pnpm rebuild sdenv
       - run: pnpm test
       - run: pnpm lint
       - run: pnpm audit --prod --audit-level high

@@ -155,6 +155,7 @@ test('DSH refresh workflow reports dependency drift through the full release gat
   assert.equal(setupStep(workflow.jobs.refresh.steps, 'actions/setup-node@v4').with['node-version'], '24.15.0')
   assert.deepEqual(runs, [
     'pnpm update @deepseek-ai/dsh@latest @deepseek-ai/dsh-host-apiproxy@next @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-tools@next --ignore-scripts',
+    'pnpm rebuild sdenv',
     'pnpm test',
     'pnpm lint',
     'pnpm audit --prod --audit-level high',
