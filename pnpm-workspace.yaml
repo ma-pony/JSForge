@@ -7,4 +7,5 @@ minimumReleaseAgeExclude:
   - fast-uri@3.1.5
 overrides:
   form-data: 4.0.6
+  'picomatch@<2.3.2': 2.3.2
   ws: 8.21.3

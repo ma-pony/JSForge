@@ -16,8 +16,8 @@
     ".env.example"
   ],
   "bin": {
-    "deepspider": "./bin/cli.js",
-    "deepspider-mcp": "./src/mcp/server.js"
+    "deepspider": "bin/cli.js",
+    "deepspider-mcp": "src/mcp/server.js"
   },
   "scripts": {
     "mcp": "node src/mcp/server.js",

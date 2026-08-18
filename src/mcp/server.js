@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 /**
  * DeepSpider MCP Server
  * Exposes the DeepSpider catalog through a stdio MCP adapter.
