@@ -166,6 +166,10 @@ function publicAttempt({ attempt, runId, result, outputs, validation }) {
   }
 }
 
+function artifactReference(artifact) {
+  return { id: artifact.id, sha256: artifact.sha256 }
+}
+
 export class RecoveryCoordinator {
   constructor(runtime) {
     if (!runtime || typeof runtime !== 'object') throw new TypeError('runtime must be provided')
@@ -219,6 +223,7 @@ export class RecoveryCoordinator {
       contractRecord = { artifact, value: contract }
     }
     const contract = contractRecord.value
+    const contractHash = hashContract(contract)
 
     let recipeRecord = await loadRecipe(store, contractRecord.artifact.id)
     if (!recipeRecord) {
@@ -229,11 +234,12 @@ export class RecoveryCoordinator {
         sourceId: contractRecord.artifact.id,
         url: targetUrl,
         content: recipe,
-        metadata: { contractHash: hashContract(contract) },
+        metadata: { contractHash },
       })
       recipeRecord = { artifact, value: recipe }
     }
     const recipe = recipeRecord.value
+    const recipeHash = hashRecipe(recipe)
     const recoveryRuntime = this.runtime.getRecoveryRuntime()
     const attempts = []
     const rawUnknowns = []
@@ -245,23 +251,47 @@ export class RecoveryCoordinator {
       const runId = `recovery-${Date.now().toString(36)}-${attempt}`
       const result = await recoveryRuntime.execute({ runId, contract, recipe, signal })
       throwIfAborted(signal)
+      const runIdentity = {
+        contractHash,
+        recipeHash,
+        engine: {
+          name: result.engine?.name ?? null,
+          version: result.engine?.version ?? null,
+        },
+        upstream: {
+          artifactGraph: artifactReference(graphArtifact),
+          contract: artifactReference(contractRecord.artifact),
+          recipe: artifactReference(recipeRecord.artifact),
+        },
+      }
       const runArtifact = await store.saveArtifact({
         kind: 'runtime-run',
         origin: 'derived',
         sourceId: recipeRecord.artifact.id,
         url: targetUrl,
         content: { attempt, runId, result },
-        metadata: { runId, attempt, ok: result.ok, engine: result.engine?.name || null },
+        metadata: {
+          runId, attempt, ok: result.ok, engine: result.engine?.name || null, identity: runIdentity,
+        },
       })
       const outputs = []
       for (const output of result.outputs) {
+        const outputIdentity = {
+          ...runIdentity,
+          upstream: {
+            ...runIdentity.upstream,
+            runtimeRun: artifactReference(runArtifact),
+          },
+        }
         const artifact = await store.saveArtifact({
           kind: 'generated-output',
           origin: 'generated',
           sourceId: runArtifact.id,
           url: targetUrl,
           content: output,
-          metadata: { runId, outputKind: output.kind, outputName: output.name || null },
+          metadata: {
+            runId, outputKind: output.kind, outputName: output.name || null, identity: outputIdentity,
+          },
         })
         outputs.push({ ...output, artifactId: artifact.id })
       }
@@ -333,7 +363,7 @@ export class RecoveryCoordinator {
       if (validation.accepted) {
         const solverDir = join(
           this.runtime.paths.solvers,
-          `${hashContract(contract).slice(0, 16)}-${hashRecipe(recipe).slice(0, 16)}`,
+          `${contractHash.slice(0, 16)}-${recipeHash.slice(0, 16)}`,
         )
         const solver = await exportSolver({
           sessionId: this.runtime.sessionId,
