@@ -92,6 +92,17 @@ function failedResult() {
   }
 }
 
+function recoveryAbortError() {
+  const error = new Error('RECOVERY_ABORTED')
+  error.name = 'AbortError'
+  error.code = 'RECOVERY_ABORTED'
+  return error
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw signal.reason
+}
+
 async function savePrivateFailure(runtime, error, url) {
   if (typeof runtime.dataStore?.saveArtifact !== 'function') return
   const failure = error instanceof Error
@@ -151,6 +162,7 @@ export function createRecoveryTool({
 
       let compact
       try {
+        throwIfAborted(signal)
         const result = await coordinatorFactory(runtime).recover({
           url,
           outputKind,
@@ -158,9 +170,11 @@ export function createRecoveryTool({
           mode,
           signal,
         })
+        throwIfAborted(signal)
         compact = compactResult(result)
       } catch (error) {
         await savePrivateFailure(runtime, error, url)
+        if (signal?.aborted) throw recoveryAbortError()
         compact = failedResult()
       }
 

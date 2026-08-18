@@ -165,3 +165,81 @@ test('recover_target_output stores Coordinator errors but returns one fixed comp
   assert.equal(result.nextAction, 'inspect-session-artifacts')
   assert.doesNotMatch(JSON.stringify({ result, sent }), /SECRET|source|private\/tmp|rawTrace/)
 })
+
+test('recover_target_output rejects an already-aborted operation with one fixed safe error', async () => {
+  const secret = 'Cookie: sid=SECRET source=rawTrace /private/tmp/secret.js'
+  const artifacts = []
+  const sent = []
+  const controller = new globalThis.AbortController()
+  controller.abort(new Error(secret))
+  const tool = createRecoveryTool({
+    coordinatorFactory: () => ({
+      recover: async ({ signal }) => { throw signal.reason },
+    }),
+  })
+  const runtime = {
+    dataStore: {
+      async saveArtifact(artifact) { artifacts.push(artifact); return { id: 'artifact-private' } },
+    },
+    async sendDialog(payload) { sent.push(payload); return true },
+  }
+
+  await assert.rejects(
+    tool.execute(runtime, {
+      url: 'https://example.test/',
+      outputKind: 'cookie',
+    }, controller.signal),
+    (error) => {
+      assert.equal(error.name, 'AbortError')
+      assert.equal(error.code, 'RECOVERY_ABORTED')
+      assert.equal(error.message, 'RECOVERY_ABORTED')
+      assert.doesNotMatch(`${error.name} ${error.code} ${error.message}`, /SECRET|source|private\/tmp|rawTrace/)
+      return true
+    },
+  )
+
+  assert.equal(artifacts.length, 1)
+  assert.match(JSON.stringify(artifacts[0]), /SECRET/)
+  assert.doesNotMatch(JSON.stringify(sent), /SECRET|source|private\/tmp|rawTrace/)
+})
+
+test('recover_target_output rejects an in-flight abort with one fixed safe error', async () => {
+  const secret = 'Cookie: sid=SECRET source=rawTrace /private/tmp/secret.js'
+  const artifacts = []
+  const sent = []
+  const controller = new globalThis.AbortController()
+  let started
+  const running = new Promise((resolve) => { started = resolve })
+  const tool = createRecoveryTool({
+    coordinatorFactory: () => ({
+      recover: async ({ signal }) => new Promise((resolve, reject) => {
+        started()
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      }),
+    }),
+  })
+  const runtime = {
+    dataStore: {
+      async saveArtifact(artifact) { artifacts.push(artifact); return { id: 'artifact-private' } },
+    },
+    async sendDialog(payload) { sent.push(payload); return true },
+  }
+
+  const recovery = tool.execute(runtime, {
+    url: 'https://example.test/',
+    outputKind: 'cookie',
+  }, controller.signal)
+  await running
+  controller.abort(new Error(secret))
+
+  await assert.rejects(recovery, (error) => {
+    assert.equal(error.name, 'AbortError')
+    assert.equal(error.code, 'RECOVERY_ABORTED')
+    assert.equal(error.message, 'RECOVERY_ABORTED')
+    assert.doesNotMatch(`${error.name} ${error.code} ${error.message}`, /SECRET|source|private\/tmp|rawTrace/)
+    return true
+  })
+  assert.equal(artifacts.length, 1)
+  assert.match(JSON.stringify(artifacts[0]), /SECRET/)
+  assert.doesNotMatch(JSON.stringify(sent), /SECRET|source|private\/tmp|rawTrace/)
+})
