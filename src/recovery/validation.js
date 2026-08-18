@@ -48,8 +48,11 @@ function failureResult(result, { kind, operation, path, reason, action }) {
 function abortable(promise, signal, cleanup) {
   if (!signal) return promise
   if (signal.aborted) {
-    void cleanup()
-    return Promise.reject(signal.reason)
+    const reason = signal.reason
+    return Promise.resolve(cleanup()).then(
+      () => { throw reason },
+      () => { throw reason },
+    )
   }
   return new Promise((resolve, reject) => {
     let settled = false
@@ -111,8 +114,9 @@ export async function validateGeneratedOutput({ contract, outputs, requestTempla
   }
   try {
     initialization = Promise.resolve(initCycleTLS({ autoExit: false, timeout: requestTemplate.timeoutMs }))
-    client = await abortable(initialization, signal, () => {
-      void initialization.then((lateClient) => lateClient.exit()).catch(() => {})
+    client = await abortable(initialization, signal, async () => {
+      const lateClient = await initialization.catch(() => null)
+      if (lateClient) await lateClient.exit().catch(() => {})
     })
     stage = 'request'
     const request = Promise.resolve(client(contract.request.url, {
