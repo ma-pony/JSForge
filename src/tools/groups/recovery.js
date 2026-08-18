@@ -99,10 +99,6 @@ function recoveryAbortError() {
   return error
 }
 
-function throwIfAborted(signal) {
-  if (signal?.aborted) throw signal.reason
-}
-
 async function savePrivateFailure(runtime, error, url) {
   if (typeof runtime.dataStore?.saveArtifact !== 'function') return
   const failure = error instanceof Error
@@ -115,6 +111,20 @@ async function savePrivateFailure(runtime, error, url) {
     content: failure,
     metadata: { operation: 'recover-target-output' },
   }).catch(() => {})
+}
+
+function createAbortCheckpoint(runtime, signal, url) {
+  let failureSaved = false
+  return (error = signal?.reason) => {
+    if (!signal?.aborted) return null
+    return (async () => {
+      if (!failureSaved) {
+        failureSaved = true
+        await savePrivateFailure(runtime, error, url)
+      }
+      throw recoveryAbortError()
+    })()
+  }
 }
 
 async function sendDialog(runtime, payload, options) {
@@ -154,36 +164,49 @@ export function createRecoveryTool({
       outputSelector = null,
       mode = 'auto',
     }, signal) {
+      const abortCheckpoint = createAbortCheckpoint(runtime, signal, url)
+      let pendingAbort = abortCheckpoint()
+      if (pendingAbort) await pendingAbort
       await sendDialog(runtime, {
         type: 'recovery/progress',
         stages: STARTING_STAGES,
         evidenceLevels: { browser: null, node: null, request: null },
       }, { open: true })
+      pendingAbort = abortCheckpoint()
+      if (pendingAbort) await pendingAbort
 
       let compact
+      let result
       try {
-        throwIfAborted(signal)
-        const result = await coordinatorFactory(runtime).recover({
+        result = await coordinatorFactory(runtime).recover({
           url,
           outputKind,
           outputSelector,
           mode,
           signal,
         })
-        throwIfAborted(signal)
-        compact = compactResult(result)
       } catch (error) {
+        pendingAbort = abortCheckpoint(error)
+        if (pendingAbort) await pendingAbort
         await savePrivateFailure(runtime, error, url)
-        if (signal?.aborted) throw recoveryAbortError()
         compact = failedResult()
       }
+      pendingAbort = abortCheckpoint()
+      if (pendingAbort) await pendingAbort
+      if (!compact) compact = compactResult(result)
 
+      pendingAbort = abortCheckpoint()
+      if (pendingAbort) await pendingAbort
       await sendDialog(runtime, {
         type: 'recovery/progress',
         stages: compact.stages,
         evidenceLevels: compact.evidenceLevels,
       })
+      pendingAbort = abortCheckpoint()
+      if (pendingAbort) await pendingAbort
       await sendDialog(runtime, { type: 'recovery/result', ...compact })
+      pendingAbort = abortCheckpoint()
+      if (pendingAbort) await pendingAbort
       return compact
     },
   })

@@ -243,3 +243,51 @@ test('recover_target_output rejects an in-flight abort with one fixed safe error
   assert.match(JSON.stringify(artifacts[0]), /SECRET/)
   assert.doesNotMatch(JSON.stringify(sent), /SECRET|source|private\/tmp|rawTrace/)
 })
+
+test('recover_target_output rejects an abort while the final progress Dialog is pending', async () => {
+  const secret = 'Cookie: sid=SECRET source=rawTrace /private/tmp/secret.js'
+  const artifacts = []
+  const sent = []
+  const controller = new globalThis.AbortController()
+  let progressStarted
+  const waitingForProgress = new Promise((resolve) => { progressStarted = resolve })
+  let releaseProgress
+  const pendingProgress = new Promise((resolve) => { releaseProgress = resolve })
+  let progressCount = 0
+  const tool = createRecoveryTool({
+    coordinatorFactory: () => ({
+      recover: async () => coordinatorResult('alpha'),
+    }),
+  })
+  const runtime = {
+    dataStore: {
+      async saveArtifact(artifact) { artifacts.push(artifact); return { id: 'artifact-private' } },
+    },
+    async sendDialog(payload) {
+      sent.push(payload)
+      if (payload.type === 'recovery/progress' && ++progressCount === 2) {
+        progressStarted()
+        await pendingProgress
+      }
+      return true
+    },
+  }
+
+  const recovery = tool.execute(runtime, {
+    url: 'https://example.test/',
+    outputKind: 'cookie',
+  }, controller.signal)
+  await waitingForProgress
+  controller.abort(new Error(secret))
+  releaseProgress()
+
+  await assert.rejects(recovery, (error) => (
+    error.name === 'AbortError'
+    && error.code === 'RECOVERY_ABORTED'
+    && error.message === 'RECOVERY_ABORTED'
+  ))
+  assert.equal(artifacts.length, 1)
+  assert.match(JSON.stringify(artifacts[0]), /SECRET/)
+  assert.deepEqual(sent.map(({ type }) => type), ['recovery/progress', 'recovery/progress'])
+  assert.doesNotMatch(JSON.stringify(sent), /SECRET|source|private\/tmp|rawTrace/)
+})
