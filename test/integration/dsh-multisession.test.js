@@ -73,8 +73,8 @@ test('two real DSH Sessions isolate browser state, dispose exactly, and shut Chr
     assertDistinctPair(navigated.isolation.roots, 'Session root')
     assertDistinctPair(navigated.isolation.dataRoots, 'DataStore root')
     assertDistinctPair(navigated.isolation.browserDataRoots, 'browser-data root')
-    assertDistinctPair(navigated.isolation.rebuildRoots, 'rebuild root')
-    assertRebuildArtifacts(navigated.isolation)
+    assertRecoveryResult(navigated.isolation.recovery)
+    assert.doesNotMatch(JSON.stringify(navigated.isolation.recovery), /DSH_SESSION_SECRET|rawTrace|private\/tmp/)
 
     const firstSnapshot = descendantProcesses(child.pid)
     const firstChromium = firstSnapshot.filter(isChromium)
@@ -148,40 +148,52 @@ function assertDistinctPair(values, label) {
   assert.notEqual(values[0], values[1], label)
 }
 
-function assertRebuildArtifacts(isolation) {
-  const { rebuildArtifacts, rebuildRoots } = isolation
-  assert.equal(rebuildArtifacts.length, 2)
-  assert.notEqual(path.basename(rebuildArtifacts[0].taskDir), path.basename(rebuildArtifacts[1].taskDir))
-  assertDistinctPair(
-    rebuildArtifacts.map(({ manifest }) => manifest.sessionId),
-    'captured DataStore session',
-  )
-
-  for (const [index, artifact] of rebuildArtifacts.entries()) {
-    const otherIndex = index === 0 ? 1 : 0
-    assert.equal(artifact.success, true)
-    assert.equal(path.dirname(artifact.taskDir), rebuildRoots[index])
-    assert.equal(artifact.manifest.sessionId, artifact.capturedScript.sessionId)
-    assert.equal(artifact.manifest.scriptId, artifact.capturedScript.id)
-    assert.equal(artifact.manifest.scriptUrl, artifact.capturedScript.url)
-    assert.match(artifact.manifest.scriptUrl, new RegExp(`session=${index === 0 ? 'A' : 'B'}$`))
-    assert.equal(fs.existsSync(path.join(artifact.taskDir, 'manifest.json')), true)
-    assert.match(
-      fs.readFileSync(path.join(artifact.taskDir, 'target.original.js'), 'utf8'),
-      new RegExp(`native-session-${index === 0 ? 'A' : 'B'}`),
-    )
-    assert.equal(
-      fs.existsSync(path.join(rebuildRoots[otherIndex], path.basename(artifact.taskDir))),
-      false,
-      `Session ${index} rebuild artifact crossed into Session ${otherIndex}`,
-    )
-  }
+function assertRecoveryResult(recovery) {
+  assert.deepEqual(recovery.modelResult.stages, {
+    browserEvidence: 'complete',
+    artifactGraph: 'complete',
+    nodeGeneration: 'complete',
+    requestValidation: 'complete',
+  })
+  assert.deepEqual(recovery.modelResult.evidenceLevels, {
+    browser: 'observed', node: 'reproduced', request: 'reproduced',
+  })
+  assert.equal(recovery.modelResult.strategy, 'semantic-runtime')
+  assert.equal(recovery.modelResult.blocker, null)
+  assert.match(recovery.modelResult.solverId, /^artifact-[a-f0-9]{64}$/)
+  assert.equal(recovery.modelResult.nextAction, null)
+  assert.deepEqual(recovery.dialogEvents.map(({ payload }) => payload.type), [
+    'recovery/progress', 'recovery/progress', 'recovery/result',
+  ])
+  assert.equal(recovery.dialogEvents.every(({ delivered }) => delivered === true), true)
+  assert.equal(recovery.sessionARecoveryRuntime, true)
+  assert.equal(recovery.sessionBRecoveryRuntime, false)
+  assert.equal(recovery.sessionAArtifactKinds.includes('runtime-run'), true)
+  assert.equal(recovery.sessionAArtifactKinds.includes('validation'), true)
+  assert.equal(recovery.sessionAArtifactKinds.includes('solver'), true)
+  assert.deepEqual(recovery.sessionBArtifactKinds, [])
 }
 
 async function startTargetServer() {
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1')
     const session = url.searchParams.get('session') || 'unknown'
+    const challengeName = `dsh_challenge_${session}`
+    const challengeValue = `DSH_SESSION_SECRET_${session}`
+    const accepted = String(request.headers.cookie || '').split(/;\s*/).includes(
+      `${challengeName}=${challengeValue}`,
+    )
+    if (url.pathname === '/acceptance' && !accepted) {
+      response.writeHead(412, { 'content-type': 'text/html; charset=utf-8' })
+      response.end([
+        '<!doctype html><title>DSH Local Challenge</title>',
+        '<script>',
+        `document.cookie = ${JSON.stringify(`${challengeName}=${challengeValue}; Path=/`)};`,
+        'location.replace(location.href);',
+        '</script>',
+      ].join(''))
+      return
+    }
     if (url.pathname === '/native-artifact.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
       response.end([

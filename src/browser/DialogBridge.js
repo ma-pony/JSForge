@@ -1,22 +1,84 @@
 import { getAnalysisPanelScript } from './ui/analysisPanel.js'
 
 const BINDING_NAME = '__deepspider_send__'
+const STAGE_STATUS = new Set(['pending', 'running', 'complete', 'blocked', 'skipped'])
+const EVIDENCE_LEVELS = new Set(['observed', 'replayed', 'reproduced'])
+const STRATEGIES = new Set(['semantic-runtime', 'algorithm-recovery', 'recovery-failed'])
+const BLOCKER_KINDS = new Set(['environment', 'resource', 'program', 'validation'])
+const BLOCKER_OPERATIONS = new Set([
+  'algorithm-recovery',
+  'cycle-tls-initialize',
+  'cycle-tls-request',
+  'recovery-failed',
+  'validate-generated-output',
+  'validate-output-kind',
+])
+const BLOCKER_REASONS = new Set([
+  'algorithm-recovery-engine-not-implemented',
+  'recovery-failed',
+  'status-title-or-cookie-mismatch',
+])
+const NEXT_ACTIONS = new Set([
+  'implement-algorithm-recovery-engine',
+  'inspect-program-behavior',
+  'inspect-session-artifacts',
+  'provide-environment-value',
+  'provide-resource',
+  'refresh-request-contract',
+  'repair-cycle-tls-runtime',
+  'retry-network-request',
+])
+const OUTPUT_KINDS = new Set(['cookie', 'header', 'query', 'body', 'return-value', 'navigation'])
+const SOLVER_ID = /^artifact-[a-f0-9]{64}$/
+const OPAQUE_ID = /^[a-zA-Z0-9_-]{1,128}$/
 
 function ownedJson(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
-function picked(value, fields) {
-  if (!value || typeof value !== 'object') return null
-  return Object.fromEntries(fields.filter((field) => field in value).map((field) => [field, value[field]]))
+function known(value, allowed, fallback) {
+  return allowed.has(value) ? value : fallback
 }
 
 function compactQuestion(question) {
-  const value = picked(question, ['id', 'header', 'question', 'detail', 'multiSelect']) || {}
-  value.options = Array.isArray(question?.options)
-    ? question.options.map((option) => picked(option, ['label', 'description']) || {})
+  const options = Array.isArray(question?.options)
+    ? question.options.filter(({ label }) => OUTPUT_KINDS.has(label)).map(({ label }) => ({
+      label,
+      description: `${label} output`,
+    }))
     : []
+  return {
+    id: 'recovery-output-kind',
+    header: '目标输出',
+    question: '选择需要独立生成的输出',
+    multiSelect: false,
+    options,
+  }
+}
+
+function compactStages(stages) {
+  const value = {}
+  for (const field of ['browserEvidence', 'artifactGraph', 'nodeGeneration', 'requestValidation']) {
+    if (stages && field in stages) value[field] = known(stages[field], STAGE_STATUS, 'blocked')
+  }
   return value
+}
+
+function compactEvidence(evidence) {
+  const value = {}
+  for (const field of ['browser', 'node', 'request']) {
+    if (evidence && field in evidence) value[field] = known(evidence[field], EVIDENCE_LEVELS, null)
+  }
+  return value
+}
+
+function compactBlocker(blocker) {
+  if (!blocker) return null
+  return {
+    kind: known(blocker.kind, BLOCKER_KINDS, 'program'),
+    operation: known(blocker.operation, BLOCKER_OPERATIONS, 'recovery-failed'),
+    reason: known(blocker.reason, BLOCKER_REASONS, 'recovery-failed'),
+  }
 }
 
 function compactRecoveryPayload(payload) {
@@ -30,26 +92,26 @@ function compactRecoveryPayload(payload) {
   if (payload.type === 'recovery/question') {
     return {
       type: payload.type,
-      rpcId: payload.rpcId,
+      rpcId: OPAQUE_ID.test(payload.rpcId) ? payload.rpcId : null,
       questions: Array.isArray(payload.questions) ? payload.questions.map(compactQuestion) : [],
     }
   }
   if (payload.type === 'recovery/progress') {
     return {
       type: payload.type,
-      stages: picked(payload.stages, ['browserEvidence', 'artifactGraph', 'nodeGeneration', 'requestValidation']) || {},
-      evidenceLevels: picked(payload.evidenceLevels, ['browser', 'node', 'request']) || {},
+      stages: compactStages(payload.stages),
+      evidenceLevels: compactEvidence(payload.evidenceLevels),
     }
   }
   if (payload.type === 'recovery/result') {
     return {
       type: payload.type,
-      stages: picked(payload.stages, ['browserEvidence', 'artifactGraph', 'nodeGeneration', 'requestValidation']) || {},
-      evidenceLevels: picked(payload.evidenceLevels, ['browser', 'node', 'request']) || {},
-      strategy: payload.strategy ?? null,
-      blocker: picked(payload.blocker, ['kind', 'operation', 'reason']),
-      solverId: payload.solverId ?? null,
-      nextAction: payload.nextAction ?? null,
+      stages: compactStages(payload.stages),
+      evidenceLevels: compactEvidence(payload.evidenceLevels),
+      strategy: known(payload.strategy, STRATEGIES, 'recovery-failed'),
+      blocker: compactBlocker(payload.blocker),
+      solverId: SOLVER_ID.test(payload.solverId) ? payload.solverId : null,
+      nextAction: known(payload.nextAction, NEXT_ACTIONS, payload.nextAction == null ? null : 'inspect-session-artifacts'),
     }
   }
   return payload

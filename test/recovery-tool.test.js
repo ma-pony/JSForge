@@ -4,6 +4,7 @@ import test from 'node:test'
 import { createRecoveryTool } from '../src/tools/groups/recovery.js'
 
 function coordinatorResult(sessionId) {
+  const solverId = `artifact-${sessionId === 'alpha' ? 'a'.repeat(64) : 'b'.repeat(64)}`
   return {
     sessionId,
     strategy: 'semantic-runtime',
@@ -12,7 +13,7 @@ function coordinatorResult(sessionId) {
     validation: { level: 'reproduced', accepted: true },
     blocker: null,
     nextActions: [],
-    solver: { artifactId: `solver-${sessionId}`, directory: `/private/${sessionId}` },
+    solver: { artifactId: solverId, directory: `/private/${sessionId}` },
     contract: { secret: 'must-not-leak' },
     recipe: { fixedValues: { token: 'must-not-leak' } },
   }
@@ -73,12 +74,12 @@ test('recover_target_output keeps Coordinator and Dialog state inside each Sessi
     },
     strategy: 'semantic-runtime',
     blocker: null,
-    solverId: 'solver-alpha',
+    solverId: `artifact-${'a'.repeat(64)}`,
     nextAction: null,
   })
   assert.equal(JSON.stringify(alpha).includes('must-not-leak'), false)
   assert.equal(JSON.stringify(alpha).includes('/private/'), false)
-  assert.equal(beta.solverId, 'solver-beta')
+  assert.equal(beta.solverId, `artifact-${'b'.repeat(64)}`)
 })
 
 test('recover_target_output exposes the exact bounded public contract', () => {
@@ -91,4 +92,76 @@ test('recover_target_output exposes the exact bounded public contract', () => {
   assert.equal(tool.parameters.outputKind.required, true)
   assert.deepEqual(tool.parameters.mode.enum, ['auto', 'semantic', 'algorithm'])
   assert.equal(tool.parameters.mode.default, 'auto')
+})
+
+test('recover_target_output maps untrusted Coordinator strings to fixed public codes', async () => {
+  const secret = 'Cookie: sid=SECRET source=rawTrace /private/tmp/secret.js'
+  const sent = []
+  const tool = createRecoveryTool({
+    coordinatorFactory: () => ({
+      recover: async () => ({
+        strategy: secret,
+        graphArtifactId: 'artifact-graph',
+        attempts: [{ outputCount: 1 }],
+        validation: { level: secret, accepted: true },
+        blocker: { kind: secret, operation: secret, reason: secret },
+        nextActions: [{ action: secret }],
+        solver: { artifactId: secret },
+      }),
+    }),
+  })
+  const runtime = {
+    async sendDialog(payload) { sent.push(payload); return true },
+  }
+
+  const result = await tool.execute(runtime, {
+    url: 'https://example.test/',
+    outputKind: 'cookie',
+  })
+
+  assert.deepEqual(result, {
+    stages: {
+      browserEvidence: 'complete',
+      artifactGraph: 'complete',
+      nodeGeneration: 'complete',
+      requestValidation: 'complete',
+    },
+    evidenceLevels: { browser: 'observed', node: 'reproduced', request: null },
+    strategy: 'recovery-failed',
+    blocker: { kind: 'program', operation: 'recovery-failed', reason: 'recovery-failed' },
+    solverId: null,
+    nextAction: 'inspect-session-artifacts',
+  })
+  assert.doesNotMatch(JSON.stringify({ result, sent }), /SECRET|source|private\/tmp|rawTrace/)
+})
+
+test('recover_target_output stores Coordinator errors but returns one fixed compact failure', async () => {
+  const secret = 'Cookie: sid=SECRET source=rawTrace /private/tmp/secret.js'
+  const artifacts = []
+  const sent = []
+  const tool = createRecoveryTool({
+    coordinatorFactory: () => ({
+      recover: async () => { throw new Error(secret) },
+    }),
+  })
+  const runtime = {
+    dataStore: {
+      async saveArtifact(artifact) { artifacts.push(artifact); return { id: 'artifact-private' } },
+    },
+    async sendDialog(payload) { sent.push(payload); return true },
+  }
+
+  const result = await tool.execute(runtime, {
+    url: 'https://example.test/',
+    outputKind: 'cookie',
+  })
+
+  assert.equal(artifacts.length, 1)
+  assert.match(JSON.stringify(artifacts[0]), /SECRET/)
+  assert.equal(result.strategy, 'recovery-failed')
+  assert.deepEqual(result.blocker, {
+    kind: 'program', operation: 'recovery-failed', reason: 'recovery-failed',
+  })
+  assert.equal(result.nextAction, 'inspect-session-artifacts')
+  assert.doesNotMatch(JSON.stringify({ result, sent }), /SECRET|source|private\/tmp|rawTrace/)
 })

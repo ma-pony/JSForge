@@ -182,39 +182,16 @@ async function runCode(ctx, agent, description, code, signal) {
   return result.value.result
 }
 
-async function exportNativeRebuild(ctx, agent, target, session, taskId, signal) {
-  const scriptUrl = new URL(`/native-artifact.js?session=${session}`, target).href
-  const scripts = await waitForValue(
-    () => runCode(
-      ctx,
-      agent,
-      `List captured scripts for Session ${session}`,
-      'return await tools.list_scripts({})',
-      signal,
+async function waitForRecoveryEvidence(runtime, url, signal) {
+  return waitForValue(
+    () => runtime.dataStore.getResponseList(null, true),
+    (entries) => (
+      entries.some((entry) => entry.url === url && entry.status === 412)
+      && entries.some((entry) => entry.url === url && entry.status === 200)
     ),
-    (entries) => entries.some(({ url }) => url === scriptUrl),
     signal,
-    `Session ${session} script capture`,
+    `challenge and accepted evidence for ${url}`,
   )
-  const script = scripts.find(({ url }) => url === scriptUrl)
-  const artifact = await runCode(
-    ctx,
-    agent,
-    `Export the native rebuild bundle for Session ${session}`,
-    `return await tools.export_rebuild_bundle(${JSON.stringify({
-      taskId,
-      scriptId: script.id,
-    })})`,
-    signal,
-  )
-  return {
-    ...artifact,
-    capturedScript: {
-      id: script.id,
-      url: script.url,
-      sessionId: script.sessionId,
-    },
-  }
 }
 
 async function concurrencyReport(manager, firstAgent, secondAgent) {
@@ -343,9 +320,33 @@ async function runMultisession(ctx, own, release, signal) {
   const manager = ctx.deepSpiderRuntimeManager
   const runtimeA = await manager.get(handleA.agent, { signal })
   const runtimeB = await manager.get(handleB.agent, { signal })
-  const rebuildArtifacts = await Promise.all([
-    exportNativeRebuild(ctx, handleA.agent, target, 'A', 'native-session-a', signal),
-    exportNativeRebuild(ctx, handleB.agent, target, 'B', 'native-session-b', signal),
+  const targetA = `${target}?session=A`
+  const targetB = `${target}?session=B`
+  await Promise.all([
+    waitForRecoveryEvidence(runtimeA, targetA, signal),
+    waitForRecoveryEvidence(runtimeB, targetB, signal),
+  ])
+  const dialogEvents = []
+  const sendDialog = runtimeA.sendDialog.bind(runtimeA)
+  runtimeA.sendDialog = async (payload, options) => {
+    const delivered = await sendDialog(payload, options)
+    dialogEvents.push({ payload, delivered })
+    return delivered
+  }
+  const recoveryA = await runCode(
+    ctx,
+    handleA.agent,
+    'Recover one local challenge Cookie through the native Catalog',
+    `return await tools.recover_target_output(${JSON.stringify({
+      url: targetA,
+      outputKind: 'cookie',
+      mode: 'auto',
+    })})`,
+    signal,
+  )
+  const [artifactsA, artifactsB] = await Promise.all([
+    runtimeA.dataStore.listArtifacts(),
+    runtimeB.dataStore.listArtifacts(),
   ])
   const oldRuntimeId = identify(runtimeA)
   const oldBrowserId = identify(runtimeA.browserClient)
@@ -367,8 +368,14 @@ async function runMultisession(ctx, own, release, signal) {
       roots: [runtimeA.paths.root, runtimeB.paths.root],
       dataRoots: [runtimeA.dataStore.root, runtimeB.dataStore.root],
       browserDataRoots: [runtimeA.paths.browserData, runtimeB.paths.browserData],
-      rebuildRoots: [runtimeA.paths.rebuild, runtimeB.paths.rebuild],
-      rebuildArtifacts,
+      recovery: {
+        modelResult: recoveryA,
+        dialogEvents,
+        sessionAArtifactKinds: artifactsA.map(({ kind }) => kind),
+        sessionBArtifactKinds: artifactsB.map(({ kind }) => kind),
+        sessionARecoveryRuntime: runtimeA.recoveryRuntime !== null,
+        sessionBRecoveryRuntime: runtimeB.recoveryRuntime !== null,
+      },
     },
   })
 

@@ -66,6 +66,7 @@ test('Dialog owns binding messages, sends JSON-owned payloads, and removes itsel
 test('Dialog keeps Recovery messages compact and reuses the native DSH question envelope', async () => {
   const { cdp, evaluations, page } = harness()
   const bridge = new DialogBridge()
+  const solverId = `artifact-${'a'.repeat(64)}`
   await bridge.open({ page, cdp })
 
   await bridge.send({
@@ -74,7 +75,7 @@ test('Dialog keeps Recovery messages compact and reuses the native DSH question 
     evidenceLevels: { browser: 'observed', request: 'reproduced' },
     strategy: 'semantic-runtime',
     blocker: null,
-    solverId: 'solver-1',
+    solverId,
     nextAction: null,
     cookie: 'secret-cookie-value',
     rawTrace: 'secret-trace',
@@ -86,7 +87,7 @@ test('Dialog keeps Recovery messages compact and reuses the native DSH question 
     evidenceLevels: { browser: 'observed', request: 'reproduced' },
     strategy: 'semantic-runtime',
     blocker: null,
-    solverId: 'solver-1',
+    solverId,
     nextAction: null,
   })
 
@@ -103,8 +104,66 @@ test('Dialog keeps Recovery messages compact and reuses the native DSH question 
   assert.equal(evaluations.at(-1)[1].type, 'recovery/question')
   assert.equal(evaluations.at(-1)[1].rpcId, 'question-1')
   assert.deepEqual(evaluations.at(-1)[1].questions[0].options, [
-    { label: 'cookie', description: 'Cookie output' },
+    { label: 'cookie', description: 'cookie output' },
   ])
+})
+
+test('Dialog maps untrusted values inside allowed Recovery fields to fixed safe codes', async () => {
+  const { cdp, evaluations, page } = harness()
+  const bridge = new DialogBridge()
+  const secret = 'Cookie: sid=SECRET source=rawTrace /private/tmp/secret.js'
+  await bridge.open({ page, cdp })
+
+  await bridge.send({
+    type: 'recovery/result',
+    stages: {
+      browserEvidence: secret,
+      artifactGraph: secret,
+      nodeGeneration: secret,
+      requestValidation: secret,
+    },
+    evidenceLevels: { browser: secret, node: secret, request: secret },
+    strategy: secret,
+    blocker: { kind: secret, operation: secret, reason: secret },
+    solverId: secret,
+    nextAction: secret,
+  })
+
+  assert.deepEqual(evaluations.at(-1)[1], {
+    type: 'recovery/result',
+    stages: {
+      browserEvidence: 'blocked',
+      artifactGraph: 'blocked',
+      nodeGeneration: 'blocked',
+      requestValidation: 'blocked',
+    },
+    evidenceLevels: { browser: null, node: null, request: null },
+    strategy: 'recovery-failed',
+    blocker: { kind: 'program', operation: 'recovery-failed', reason: 'recovery-failed' },
+    solverId: null,
+    nextAction: 'inspect-session-artifacts',
+  })
+  assert.doesNotMatch(JSON.stringify(evaluations.at(-1)[1]), /SECRET|source|private\/tmp|rawTrace/)
+
+  await bridge.send({
+    type: 'question/requested',
+    rpcId: 'question-safe-id',
+    questions: [{
+      id: 'recovery-output-kind',
+      header: secret,
+      question: secret,
+      detail: secret,
+      options: [{ label: 'cookie', description: secret }, { label: secret, description: secret }],
+    }],
+  })
+  assert.deepEqual(evaluations.at(-1)[1].questions, [{
+    id: 'recovery-output-kind',
+    header: '目标输出',
+    question: '选择需要独立生成的输出',
+    multiSelect: false,
+    options: [{ label: 'cookie', description: 'cookie output' }],
+  }])
+  assert.doesNotMatch(JSON.stringify(evaluations.at(-1)[1]), /SECRET|source|private\/tmp|rawTrace/)
 })
 
 test('analysis Dialog encodes one complete native DSH question batch', () => {

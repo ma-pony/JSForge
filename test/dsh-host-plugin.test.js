@@ -206,9 +206,9 @@ test('native question frames and exact answer envelope stay on their owning Sess
       type: 'question/requested',
       sessionId: 'alpha',
       questions: [{
-        id: 'strategy',
-        question: 'Choose a strategy',
-        options: [{ label: 'Hook' }, { label: 'Replay' }],
+        id: 'recovery-output-kind',
+        question: 'Choose the target output',
+        options: [{ label: 'cookie' }, { label: 'header' }],
       }],
     },
   }, {
@@ -252,7 +252,7 @@ test('native question frames and exact answer envelope stay on their owning Sess
     message: {
       type: 'question/answer',
       rpcId: 'question-rpc',
-      answers: [{ id: 'strategy', selected: ['Hook'] }],
+      answers: [{ id: 'recovery-output-kind', selected: ['cookie'] }],
     },
   })
   assert.deepEqual(client.responses, [{
@@ -262,7 +262,7 @@ test('native question frames and exact answer envelope stay on their owning Sess
       ok: true,
       value: {
         sessionId: 'alpha',
-        answer: { answers: [{ id: 'strategy', selected: ['Hook'] }] },
+        answer: { answers: [{ id: 'recovery-output-kind', selected: ['cookie'] }] },
       },
     },
   }])

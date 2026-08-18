@@ -4,6 +4,30 @@ import { defineDeepSpiderTool } from '../catalog.js'
 
 const OUTPUT_KIND_VALUES = [...OUTPUT_KINDS]
 const RECOVERY_MODES = ['auto', 'semantic', 'algorithm']
+const STRATEGIES = new Set(['semantic-runtime', 'algorithm-recovery'])
+const EVIDENCE_LEVELS = new Set(['observed', 'replayed', 'reproduced'])
+const BLOCKER_KINDS = new Set(['environment', 'resource', 'program', 'validation'])
+const BLOCKER_OPERATIONS = new Set([
+  'algorithm-recovery',
+  'cycle-tls-initialize',
+  'cycle-tls-request',
+  'validate-generated-output',
+  'validate-output-kind',
+])
+const BLOCKER_REASONS = new Set([
+  'algorithm-recovery-engine-not-implemented',
+  'status-title-or-cookie-mismatch',
+])
+const NEXT_ACTIONS = new Set([
+  'implement-algorithm-recovery-engine',
+  'inspect-program-behavior',
+  'provide-environment-value',
+  'provide-resource',
+  'refresh-request-contract',
+  'repair-cycle-tls-runtime',
+  'retry-network-request',
+])
+const SOLVER_ID = /^artifact-[a-f0-9]{64}$/
 
 const STARTING_STAGES = Object.freeze({
   browserEvidence: 'running',
@@ -15,16 +39,16 @@ const STARTING_STAGES = Object.freeze({
 function compactBlocker(blocker) {
   if (!blocker) return null
   return {
-    kind: blocker.kind ?? null,
-    operation: blocker.operation ?? null,
-    reason: blocker.reason ?? null,
+    kind: BLOCKER_KINDS.has(blocker.kind) ? blocker.kind : 'program',
+    operation: BLOCKER_OPERATIONS.has(blocker.operation) ? blocker.operation : 'recovery-failed',
+    reason: BLOCKER_REASONS.has(blocker.reason) ? blocker.reason : 'recovery-failed',
   }
 }
 
 function firstAction(result) {
   const value = result.nextActions?.[0]
-  if (typeof value === 'string') return value
-  return value?.action ?? null
+  const action = typeof value === 'string' ? value : value?.action
+  return NEXT_ACTIONS.has(action) ? action : value == null ? null : 'inspect-session-artifacts'
 }
 
 function compactResult(result) {
@@ -43,13 +67,43 @@ function compactResult(result) {
     evidenceLevels: {
       browser: hasGraph ? 'observed' : null,
       node: accepted ? 'reproduced' : null,
-      request: result.validation?.level ?? null,
+      request: EVIDENCE_LEVELS.has(result.validation?.level) ? result.validation.level : null,
     },
-    strategy: result.strategy ?? null,
+    strategy: STRATEGIES.has(result.strategy) ? result.strategy : 'recovery-failed',
     blocker: compactBlocker(result.blocker),
-    solverId: result.solver?.artifactId ?? null,
+    solverId: SOLVER_ID.test(result.solver?.artifactId) ? result.solver.artifactId : null,
     nextAction: firstAction(result),
   }
+}
+
+function failedResult() {
+  return {
+    stages: {
+      browserEvidence: 'blocked',
+      artifactGraph: 'blocked',
+      nodeGeneration: 'blocked',
+      requestValidation: 'blocked',
+    },
+    evidenceLevels: { browser: null, node: null, request: null },
+    strategy: 'recovery-failed',
+    blocker: { kind: 'program', operation: 'recovery-failed', reason: 'recovery-failed' },
+    solverId: null,
+    nextAction: 'inspect-session-artifacts',
+  }
+}
+
+async function savePrivateFailure(runtime, error, url) {
+  if (typeof runtime.dataStore?.saveArtifact !== 'function') return
+  const failure = error instanceof Error
+    ? { name: error.name, message: error.message, stack: error.stack }
+    : { name: 'Error', message: String(error), stack: null }
+  await runtime.dataStore.saveArtifact({
+    kind: 'recovery-failure',
+    origin: 'generated',
+    url,
+    content: failure,
+    metadata: { operation: 'recover-target-output' },
+  }).catch(() => {})
 }
 
 async function sendDialog(runtime, payload, options) {
@@ -95,14 +149,20 @@ export function createRecoveryTool({
         evidenceLevels: { browser: null, node: null, request: null },
       }, { open: true })
 
-      const result = await coordinatorFactory(runtime).recover({
-        url,
-        outputKind,
-        outputSelector,
-        mode,
-        signal,
-      })
-      const compact = compactResult(result)
+      let compact
+      try {
+        const result = await coordinatorFactory(runtime).recover({
+          url,
+          outputKind,
+          outputSelector,
+          mode,
+          signal,
+        })
+        compact = compactResult(result)
+      } catch (error) {
+        await savePrivateFailure(runtime, error, url)
+        compact = failedResult()
+      }
 
       await sendDialog(runtime, {
         type: 'recovery/progress',
