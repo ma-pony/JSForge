@@ -76,7 +76,7 @@ inject_hook({
 
 如果加密逻辑在 WASM 内部，且需要在 Node.js 中复现：
 
-先从 `list_scripts` 取得当前会话的加载器 `scriptId`，再调用 `export_rebuild_bundle({ taskId, scriptId, callExpression })`。WASM 响应通过网络证据单独保存并记录 SHA-256，不写入或改写目标脚本。
+先明确 WASM 包装层最终写入的 Cookie、Header、Query、Body 或返回值，再调用 `recover_target_output({ mode: "auto" })`。WASM 响应作为当前 Session 的网络 Artifact 保存并记录 SHA-256，不写入或改写捕获脚本。若返回明确的 `program` blocker，再升级局部算法恢复。
 
 在 Node.js 中直接加载 WASM 文件，使用相同 imports 调用：
 
@@ -257,6 +257,6 @@ inject_hook({
 | `inject_preload_script` | Worker 创建前注入、Webpack require 前拦截 |
 | `inject_hook` | Hook WASM instantiate、postMessage、__webpack_require__ |
 | `find_in_script` | 定位 .wasm 请求、Worker URL、模块 ID |
-| `export_rebuild_bundle` | 按当前会话导出不可变的 JS 加载器 bundle |
+| `recover_target_output` | 在当前 Session 独立生成目标输出并完成真实请求验证 |
 | `evaluate_script` | 直接调用 __webpack_require__(moduleId) |
 | `list_network_requests` | 找 .wasm 文件下载 URL |

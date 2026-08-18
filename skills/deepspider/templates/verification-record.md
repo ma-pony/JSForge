@@ -5,24 +5,15 @@
 | 字段 | 值 |
 |------|---|
 | Browser Session | `[填写]` |
-| Script ID | `[填写]` |
-| Original Target SHA-256 | `[填写 result.originalTargetSha256]` |
-| Selected Target SHA-256 | `[填写 result.selectedTargetSha256]` |
-| Recipe SHA-256 | `[填写 result.recipeSha256]` |
-| Baseline SHA-256 | `[填写 result.baselineSha256]` |
-| Session State SHA-256 | `[填写 result.sessionStateSha256]` |
-| Property Facts SHA-256 | `[填写 result.propertyFactsSha256]` |
-| Network Replay SHA-256 | `[填写 result.networkReplaySha256]` |
-| runner SHA-256 | `[填写 result.runnerSha256]` |
-| Verify Run ID | `[填写]` |
+| Output Contract Hash | `[填写]` |
+| Recipe SHA-256 | `[填写]` |
+| Browser Evidence Artifact ID | `[填写]` |
+| Generated Output Artifact ID | `[填写]` |
+| Validation Artifact ID | `[填写]` |
+| Solver Artifact ID | `[填写]` |
+| Evidence Level | `[reproduced]` |
 
-本地运行必须使用：
-
-```bash
-node runner.mjs --mode verify
-```
-
-Probe 模式输出不得作为本验证记录的通过依据。
+本记录只有在独立 Worker 生成目标输出，并且真实请求验证为 `reproduced` 后才能标记通过。Browser Oracle、Hook 或页面内请求结果只属于 `observed` 证据。
 
 > 模板用途：记录 Python 实现与浏览器原生结果的多样本对比验证。
 > 至少完成 3 组输入输出对比，才可进入 handoff 阶段。

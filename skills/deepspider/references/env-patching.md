@@ -1,66 +1,56 @@
-# 补环境：证据驱动的 Environment Recipe
+# 补环境：证据驱动的 Runtime Recipe
 
-补环境不是复制一份浏览器，也不是把所有差异都硬编码进底层。运行时由 jsdom 提供基础 DOM，`recipe.json` 只描述当前任务实际需要的差异。
+补环境不是复制一份浏览器，也不是把所有差异硬编码进底层。DeepSpider 用当前 Session 的 Browser Oracle 证据建立 Output Contract，通过 Runtime Recipe 描述独立 Worker 真正需要的差异。
 
 ```text
-evidence/baseline.json
-+ evidence/session-state.json
-+ evidence/property-facts.json
-+ evidence/network/responses.json
-+ recipe.json
-→ jsdom Realm
+Browser Oracle evidence
++ Output Contract
++ Runtime Recipe
+→ Session-owned Worker
+→ generated output
+→ real request validation
 ```
 
 ## 环境来源
 
-- baseline：稳定、通用的 Chrome 形状和常见 API。
-- Session evidence：当前页面 URL、标题、cookie、localStorage、sessionStorage 等运行状态。
-- property facts：由 `collect_property` 得到的值、brand、原型链、ownerDepth、descriptor 和函数源码外观。
-- replay：当前 Session 中精确 URL、method、body 命中的响应。
-- Recipe：按证据选择 fixed、hide、undefined、throw、replace、mask、hook、replay 等动作。
+- Browser Oracle：页面、请求、响应、脚本、属性事实和调用位置。
+- Output Contract：目标输出类型、请求模板与成功条件。
+- Runtime Recipe：`fixedValues`、`conceal`、`windowProxyConfig`、User-Agent、TLS 和超时。
+- Worker：使用全新状态独立执行，不能读取 Patchright Cookie 或 browser-data。
 
-当前 Patchright 页面是证据来源之一，不是绝对真值。遇到 Patchright 自身可检测特征时，可与普通 Chrome 样本或多个 Session 对照，再把确认后的规则写入 Recipe。
+当前 Patchright 页面是证据来源之一，不是绝对真值。遇到自动化特征时，可与普通 Chrome、多个 Session 或已确认的目标行为对照，再把确定规则写入当前 Runtime Recipe。
 
 ## 标准循环
 
-```bash
-node runner.mjs --mode probe
-```
+1. 调用 `recover_target_output({ mode: "auto" })`。
+2. 成功返回 `reproduced` 时，保存 Solver Artifact ID。
+3. 返回 `environment` blocker 时，只采集 blocker 指向的属性值、描述符或调用位置。
+4. 返回 `resource` blocker 时，核对资源发起方、请求头与可达性。
+5. 在当前 Session 的 Runtime Recipe 中加入最小变更后重试。
+6. 返回 `program` blocker 时，只有用户同意或原本要求纯算法才升级 `mode: "algorithm"`。
 
-1. 调用 `analyze_runtime_trace`，只处理最高优先级的首次分歧。
-2. 缺少事实时调用 `collect_property`，或补采网络响应。
-3. 更新 `recipe.json`；通用差异放 baseline，确定的站点规则可直接保留在任务 Recipe。
-4. 重新 Probe，确认执行路径推进。
-5. 使用无侵入探针的 Verify：
-
-```bash
-node runner.mjs --mode verify
-```
-
-6. 最后用非浏览器客户端重放完整请求；浏览器内成功不算完成。
-
-## 工作源码
-
-`target.original.js` 保存捕获原文，禁止覆盖。格式化、去混淆或站点特定源码处理允许写入 `target.working.js`，但 `transforms.json` 必须形成从原始 hash 到工作 hash 的完整链。Runner 会拒绝未记录或被篡改的工作源码。
-
-动态 eval 源码保存到 `evidence/dynamic/<sha256>.js`，不得在原路径静默覆盖。
-
-## 网络 replay
-
-`evidence/network/responses.json` 只包含当前 Session 捕获的请求证据。fetch/XHR 按 URL、method 和 body 精确匹配；miss 会记录 `replay-miss` 并失败，不生成假的 200 响应。
+每轮只处理首个 blocker，不批量猜测环境。
 
 ## 常见差异
 
-- Node 身份：隐藏 `process`、`Buffer`、`require`、`module`、`global` 等宿主特征。
-- jsdom 内部特征：确认属性名和访问路径后，用 hide/mask 规则处理；无需为了形式上的“通用”拒绝确定有效的规则。
+- Node 身份：确认目标确实读取后，通过 conceal 规则隐藏宿主特征。
+- 已知内部属性：若属性名和检测路径已经证实，按名称隐藏是有效策略。
 - brand/descriptor：优先使用浏览器事实恢复原型、owner 和 getter/setter 形状。
-- 时间与随机数：先对照样本；固定值可用于定位，最终 Recipe 必须能解释验证样本。
-- API 行为：优先 replay 或小型 handler，不实现完整浏览器子系统。
+- 时间与随机数：固定值可用于定位；最终 Recipe 必须能通过新请求验证。
+- API 行为：先确认调用与输出边界，再决定补最小语义还是升级算法恢复。
+
+站点、Cookie 名称或风控厂商特例不进入核心模块。确定的站点规则可以保留在当前 Session Recipe。
+
+## 源码边界
+
+捕获源码是不可变的 `observed` Artifact。需要格式化、去混淆或定点处理时，新建 `derived` Artifact，并记录来源 Artifact ID、变换说明和输入输出哈希。第一版不会自动修改 Worker 执行的捕获源码。
 
 ## 停止条件
 
-- `target.original.js` hash、Session 或 scriptId 不一致；
-- `target.working.js` 没有完整 transforms hash 链；
-- Probe 成功但 Verify 失败；
-- replay miss 或证据来自另一个 Session；
-- 没有完成离线请求级验证。
+- Contract、Recipe 或证据来自不同 Session；
+- Worker 读取了浏览器生成的目标值；
+- 真实请求未通过却把浏览器成功标为完成；
+- 三轮仍有阻塞项；
+- 需要当前引擎无法执行的程序行为。
+
+失败时保留首个 blocker 和下一步最小动作，状态保持未完成。

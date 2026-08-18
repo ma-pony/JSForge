@@ -194,7 +194,7 @@ Patchright 用于观察、Hook、断点和对照验证。浏览器自动化不�
 
 | 框架 | 特征 | 关键参数 | 应对策略 |
 |------|------|---------|---------|
-| 瑞数 (RS) | `$_ts` cookie、大量混淆 JS | `_signature`、`_token` | 补环境 + `/ds:rebuild` |
+| 瑞数 (RS) | `$_ts` cookie、大量混淆 JS | `_signature`、`_token` | `recover_target_output` + Runtime Recipe |
 | 极验 | `gt`/`challenge` 参数、滑块 | `validate` | 验证码专项处理 |
 | 5 秒盾 (Cloudflare) | `cf_clearance` cookie | TLS 指纹 | 捕获挑战状态，复现 Cookie 与传输条件 |
 | 网易易盾 | NECaptcha、`ne_verify` | — | 验证码处理 |

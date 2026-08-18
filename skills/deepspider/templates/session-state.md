@@ -33,28 +33,27 @@
 | 字段 | 值 |
 |------|---|
 | Browser Session | `[DataStore sessionId]` |
-| Script ID | `[当前会话精确 scriptId]` |
-| Script URL | `[填写]` |
-| Original Target SHA-256 | `[manifest.originalTargetSha256]` |
-| Baseline SHA-256 | `[manifest.baselineSha256]` |
-| Session State SHA-256 | `[manifest.sessionStateSha256]` |
-| Property Facts SHA-256 | `[manifest.propertyFactsSha256]` |
-| Network Replay SHA-256 | `[manifest.networkReplaySha256]` |
+| Output Contract Hash | `[填写]` |
+| Runtime Recipe Hash | `[填写]` |
+| Browser Evidence Artifact ID | `[填写]` |
+| Generated Output Artifact ID | `[填写]` |
+| Validation Artifact ID | `[填写]` |
+| Solver Artifact ID | `[填写]` |
 
 任一身份字段变化后，旧运行结果必须标记 Invalid，不得继续比较。
 
 ## Runtime Evidence
 
-| Run ID | Mode | Evidence Level | Selected Target SHA-256 | Recipe SHA-256 | Probe SHA-256 | Runner SHA-256 | 结果 |
-|--------|------|----------------|------------------------|------------------|------------------|-------------------|------|
-| `[填写]` | `[probe / verify]` | `[Observed / Hypothesis / Verified / Invalid]` | `[result.selectedTargetSha256]` | `[result.recipeSha256]` | `[result.probeSha256]` | `[result.runnerSha256]` | `[填写]` |
+| Run ID | Strategy | Evidence Level | Contract Hash | Recipe SHA-256 | Validation Artifact ID | 结果 |
+|--------|----------|----------------|---------------|----------------|------------------------|------|
+| `[填写]` | `[semantic-runtime / algorithm-recovery]` | `[Observed / Hypothesis / Verified / Invalid]` | `[填写]` | `[填写]` | `[填写]` | `[填写]` |
 
 证据等级：
 
-- Observed：浏览器或 probe 直接观察。
-- Hypothesis：基于 probe 的待验证推断。
-- Verified：相同身份的 verify 多样本确认。
-- Invalid：原始/工作 target、session、script、Recipe、evidence、Probe 或 Runner 身份不一致。
+- Observed：Browser Oracle 直接观察。
+- Hypothesis：基于 Hook、Debugger 或差异诊断的待验证推断。
+- Verified：独立 Worker 生成且真实请求验证通过。
+- Invalid：Session、Contract、Recipe 或 Artifact 身份不一致。
 
 只有 Verified 结果可以写入 Proven Facts。
 
@@ -91,7 +90,7 @@
 | 算法分析笔记 | `[填写路径]` | `[填写]` |
 | Python 实现 | `[填写路径]` | `[未开始 / 编写中 / 待验证 / 已验证]` |
 | 验证记录 | `[填写路径]` | `[填写]` |
-| 补环境 Bundle | `[填写路径，若有]` | `[填写]` |
+| Solver Artifact | `[填写 ID，若有]` | `[填写]` |
 | 爬虫项目 | `[填写路径，若有]` | `[填写]` |
 
 ---

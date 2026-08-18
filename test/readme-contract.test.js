@@ -14,16 +14,13 @@ test('bilingual READMEs describe the current evidence-driven runtime', () => {
   for (const text of readmes) {
     for (const pattern of [
       /DSH/,
-      /Observe/i,
-      /Capture/i,
-      /Recipe/i,
-      /Probe/i,
-      /Verify/i,
+      /Browser Oracle/i,
+      /Output Contract/i,
+      /Runtime Recipe/i,
+      /recover_target_output/,
+      /reproduced/,
+      /solver\.mjs/,
       /Dialog/i,
-      /target\.original\.js/,
-      /target\.working\.js/,
-      /transforms\.json/,
-      /evidence\/network\/responses\.json/,
       /browser_dialog/,
     ]) assert.match(text, pattern)
 

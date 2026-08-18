@@ -8,7 +8,7 @@
 
 **必须满足，否则不得进入本阶段：**
 
-- [ ] 不可变 bundle 的 `node runner.mjs --mode verify` 已能产出与浏览器一致的结果
+- [ ] `recover_target_output` 已达到 `reproduced`，或明确的 `program` blocker 证明需要算法提取
 - [ ] runtime 阶段的 First Divergence 已消除
 - [ ] 至少有 3 组已知的浏览器 input→output 样本（用于后续验证）
 
@@ -47,7 +47,7 @@ const fixtures = [
 
 ### Step 2：Hook Local — 区分算法输入 vs 环境输入
 
-通过浏览器 Hook、断点或 Probe 标记加密函数的入参来源，不覆盖 `target.original.js`：
+通过浏览器 Hook 或断点标记加密函数的入参来源，不覆盖捕获源码 Artifact：
 
 ```javascript
 inject_hook({
@@ -61,7 +61,7 @@ inject_hook({
 })
 ```
 
-将采样值与 `fixtures.json` 对比，确认入参一致；Probe 结论仍需 verify 复证。
+将采样值与 `fixtures.json` 对比，确认入参一致；Hook 结论仍需独立实现和真实请求复证。
 
 **目标**：明确哪些参数是"纯算法参数"（可跨语言移植），哪些是"环境参数"（需要在 Python 中同样获取）。
 

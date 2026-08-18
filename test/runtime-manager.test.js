@@ -115,7 +115,6 @@ test('DeepSpiderRuntime owns explicit session state and launches its browser laz
     propertyFacts: [],
   })
   assert.equal(runtime.selectedTarget, null)
-  assert.equal(runtime.rebuildContext, null)
 
   assert.equal(await runtime.getPage(), page)
   assert.equal(await runtime.getCDPSession(), cdp)

@@ -47,8 +47,6 @@ test('createSessionPaths isolates every derived path beneath its hashed root', (
     alpha.runs,
     alpha.validations,
     alpha.solvers,
-    alpha.output,
-    alpha.rebuild,
     alpha.screenshots,
     alpha.browserData,
   ]) {
@@ -56,6 +54,8 @@ test('createSessionPaths isolates every derived path beneath its hashed root', (
     assert.equal(fs.existsSync(child), false)
     assert.equal(child.includes(alpha.sessionId), false)
   }
+  assert.equal('output' in alpha, false)
+  assert.equal('rebuild' in alpha, false)
 })
 
 test('createSessionPaths rejects empty and non-string IDs', () => {
@@ -80,8 +80,6 @@ test('ensureSessionPaths creates private session directories', () => {
     paths.runs,
     paths.validations,
     paths.solvers,
-    paths.output,
-    paths.rebuild,
     paths.screenshots,
     paths.browserData,
   ]) {

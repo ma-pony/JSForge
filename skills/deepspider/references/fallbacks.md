@@ -40,14 +40,14 @@ set_breakpoint 后未暂停 →
   4. 触发目标操作（发请求/点击按钮）
 ```
 
-### 补环境报错循环
+### 语义运行时阻塞循环
 ```
-probe 反复出现新错误 →
-  1. 用 analyze_runtime_trace 选择最高优先级分歧
-  2. 只采集 trace 已访问的属性，并更新 recipe.json
-  3. 运行 verify；未通过时回到新的首次分歧
-  4. 保留 target.original.js；工作源码必须写 target.working.js 和 transforms.json
-  5. 无法继续时记录准确阻塞点，保持任务未完成
+recover_target_output 未通过 →
+  1. 只处理首个 environment / resource / validation / program blocker
+  2. 只采集 blocker 指向的属性或网络事实，并更新当前 Runtime Recipe
+  3. 重试恢复；真实请求未达到 reproduced 时保持未完成
+  4. 保留 observed Artifact；源码处理必须产生可追溯的 derived Artifact
+  5. 三轮仍失败时记录准确阻塞点和下一步最小动作
 ```
 
 ## 方案选择决策树

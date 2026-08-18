@@ -18,7 +18,7 @@ npm install -g deepspider
 deepspider agent
 ```
 
-DSH Web 启动后会加载 Spider Preset。创建一个 Session，描述目标请求、页面触发路径和希望得到的 JavaScript 或 Python 交付物。多个 Session 可以同时运行，各自持有独立的浏览器、DataStore 和产物目录。
+DSH Web 启动后会加载 Spider Preset。创建一个 Session，描述目标请求、页面触发路径和希望得到的 JavaScript 或 Python 交付物。多个 Session 可以同时运行，各自持有独立的浏览器、SessionArtifactStore 和产物目录。
 
 ```bash
 deepspider agent --port 3080 --verbose
@@ -30,46 +30,46 @@ deepspider agent --port 3080 --verbose
 
 一次逆向任务至少应交付：
 
-- 目标请求及其参数写入边界；
-- 可审计的原始脚本、网络响应、属性事实和运行 Trace；
-- 可离线运行的算法或补环境任务；
-- 多组输入的结果对比；
-- 一次真实请求级 Verify，证明实现能脱离浏览器完成请求。
+- Browser Oracle 捕获的目标请求与脚本证据；
+- 明确的 Output Contract 与当前 Session 的 Runtime Recipe；
+- 独立 Node Worker 生成的目标输出；
+- 使用生成值完成的真实请求验证，证据等级为 `reproduced`；
+- 可脱离浏览器 Session 运行的 Solver。
 
 浏览器抓取结果、页面自动化脚本或单次 Hook 日志只属于证据，不代表逆向已经完成。
 
-## 环境还原流程
+## 语义恢复流程
 
 ```text
-Observe → Capture → Recipe → Probe → Verify
+Browser Oracle → Artifact Graph → Output Contract → Runtime Recipe → Worker → Request Validation → Solver
 ```
 
 | 阶段 | 行为 | 约束 |
 | --- | --- | --- |
-| Observe | 打开页面、触发请求、查看网络与脚本 | 零 Probe 注入，先取得正常执行样本 |
-| Capture | 保存请求、响应、脚本、Session 状态和属性事实 | 证据绑定当前 Session 与脚本哈希 |
-| Recipe | 组合 jsdom 基础环境、事实、回放数据和任务规则 | 差异写入 `recipe.json`，不写进全局底层 |
-| Probe | 显式安装 Hook，定位首次环境分歧与完整性检测 | Probe 只用于诊断，不进入最终验证环境 |
-| Verify | 在干净 Runner 中执行目标与入口表达式 | 结果必须通过离线与真实请求级验证 |
+| Browser Oracle | 打开页面、触发请求、捕获网络、脚本和属性事实 | 浏览器结果只标记为 `observed` |
+| Artifact Graph | 关联 Document、Script、请求、响应和动态源码 | 所有证据绑定当前 Session |
+| Output Contract | 指定 Cookie、Header、Query、Body、返回值或导航输出 | 成功条件同时约束请求状态和页面内容 |
+| Runtime Recipe | 声明固定值、属性隐藏和运行边界 | 站点规则保留在 Session，不写进通用底层 |
+| Worker | 用全新状态独立执行目标页面 | 不读取 Patchright Cookie 或 browser-data |
+| Request Validation | 只用 Worker 生成值发起真实请求 | 通过后才标记为 `reproduced` |
+| Solver | 导出 Contract、Recipe 与独立运行入口 | 无需关联浏览器即可重跑 |
 
 Patchright 控制的当前 Session 是一个重要样本，不是浏览器环境的唯一真值。遇到指纹或时序问题时，应结合普通 Chrome、多个 Session 或已确认的目标行为交叉判断。
 
-### Environment Recipe
+### Runtime Recipe
 
-导出任务时，DeepSpider 生成 jsdom 基础环境，并写入当前 Session 的状态、属性事实和精确网络回放。Recipe 可以按证据选择：
+`recover_target_output` 默认使用当前 Session 的证据建立 Output Contract，并在独立 Worker 中执行 Runtime Recipe。Recipe 可以声明：
 
-- fixed 值和确定的站点规则；
-- hide、undefined、throw、replace、mask 与 concealment；
-- 小型 API handler 和 Hook；
-- 按 URL、method、body 精确匹配的 fetch/XHR replay。
+- 固定值和确定的站点规则；
+- 需要隐藏的属性路径；
+- window proxy 配置；
+- User-Agent、TLS 校验和有界超时。
 
-确定且稳定的指纹或站点规则可以直接保留在任务 Recipe 中。高频通用差异才适合进入共享 baseline。通过名称隐藏 jsdom 内部属性也可以使用，但应由真实差异或已确认检测点支持。
+确定且稳定的指纹或站点规则可以直接保留在任务 Recipe 中。当前 Patchright Session 只是证据样本；敏感指纹应结合普通 Chrome、多个 Session 或已确认目标行为判断。
 
-### 原始源码与工作源码
+### 原始证据与派生产物
 
-`target.original.js` 永远保存捕获原文。需要格式化、去混淆或定点修改时，生成 `target.working.js`，并在 `transforms.json` 记录从原始哈希到工作哈希的完整变换链。Runner 会拒绝未记录或被篡改的工作源码。
-
-动态执行源码按内容哈希保存在 `evidence/dynamic/`。网络 replay 只使用 `evidence/network/responses.json` 中当前任务已捕获的数据；不匹配的请求会产生 `replay-miss`，不会伪造成功响应。
+捕获的脚本、响应和动态源码以 `observed` Artifact 保存，内容不可覆盖。格式化、去混淆或定点处理必须新建 `derived` Artifact，并保留来源 Artifact ID 和内容哈希。Worker 输出属于 `generated` Artifact，只有请求验证通过才升级为 `reproduced` 证据。
 
 ### 八阶段逆向工作流
 
@@ -114,7 +114,7 @@ intake → evidence → locate → recover → runtime → extraction → valida
 
 ## 工具目录
 
-DeepSpider 从同一中央 Catalog 向 DSH 与 MCP 暴露八组工具，数量由代码生成，不在文档中固定：
+DeepSpider 从同一中央 Catalog 向 DSH 与 MCP 暴露工具，数量由代码生成，不在文档中固定：
 
 | 工具组 | 能力 |
 | --- | --- |
@@ -125,7 +125,7 @@ DeepSpider 从同一中央 Catalog 向 DSH 与 MCP 暴露八组工具，数量�
 | Hook | 显式注入与运行时日志查询 |
 | Stealth | 反调试拦截控制 |
 | Capture | 浏览器环境、属性描述符、原型与函数事实 |
-| Rebuild | 导出 bundle、运行 Probe/Verify、分析 Trace 与生成 Recipe 建议 |
+| Recovery | `recover_target_output` 统一完成独立生成、真实请求验证与 Solver 导出 |
 
 ## 产物
 
@@ -134,34 +134,24 @@ DeepSpider 从同一中央 Catalog 向 DSH 与 MCP 暴露八组工具，数量�
 ```text
 ~/.deepspider/sessions/<sha256(agent.id)>/
 ├── metadata/
-├── data/                 # DataStore 请求、响应与脚本
-├── output/
+├── data/                 # SessionArtifactStore 请求、响应与脚本索引
+├── evidence/
+├── contracts/
+├── recipes/
+├── runs/
+├── validations/
+├── solvers/
 ├── screenshots/
-├── browser-data/
-└── rebuild/
-    └── <task-id>/
-        ├── manifest.json
-        ├── target.original.js
-        ├── target.working.js       # 可选
-        ├── transforms.json
-        ├── recipe.json
-        ├── runner.mjs
-        ├── evidence/
-        │   ├── baseline.json
-        │   ├── session-state.json
-        │   ├── property-facts.json
-        │   ├── network/responses.json
-        │   └── dynamic/<sha256>.js
-        └── runs/<run-id>/
-            ├── result.json
-            └── trace.ndjson
+└── browser-data/
 ```
 
-运行导出的任务：
+每个成功恢复会在 `solvers/` 下生成独立目录，其中包含：
 
-```bash
-node ~/.deepspider/sessions/<session>/rebuild/<task-id>/runner.mjs --mode probe
-node ~/.deepspider/sessions/<session>/rebuild/<task-id>/runner.mjs --mode verify
+```text
+solver.mjs
+contract.json
+recipe.json
+package.json
 ```
 
 ## 架构
@@ -173,9 +163,9 @@ DSH Web Host Plane
     ├── Code Mode + DeepSpider Catalog
     └── Session-owned DeepSpider Runtime
         ├── Patchright Chromium + CDP
-        ├── Dialog + Capture/Probe
-        ├── DataStore
-        └── jsdom Environment Recipe Runner
+        ├── Dialog + Browser Oracle
+        ├── SessionArtifactStore + Artifact Graph
+        └── sdenv Worker + CycleTLS Validator + Solver
 
 MCP stdio adapter
 └── 同一 DeepSpider Catalog

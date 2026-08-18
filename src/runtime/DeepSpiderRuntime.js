@@ -105,7 +105,6 @@ export class DeepSpiderRuntime {
       propertyFacts: [],
     }
     this.selectedTarget = null
-    this.rebuildContext = null
 
     this._browserPromise = null
     this._pendingBrowser = null

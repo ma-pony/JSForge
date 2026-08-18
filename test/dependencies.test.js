@@ -32,7 +32,6 @@ test('manifest has the exact direct runtime dependency surface', () => {
     '@modelcontextprotocol/sdk',
     'acorn',
     'cycletls',
-    'jsdom',
     'patchright',
     'sdenv',
     'zod',
@@ -48,7 +47,12 @@ test('pnpm policy permits audited transitive security releases', () => {
   assert.match(pnpmWorkspace, /^ {2}ws: 8\.21\.3$/m)
 })
 
-test('manifest declares the Node floor required by jsdom 30', () => {
+test('pnpm permits only the semantic runtime native build', () => {
+  assert.match(pnpmWorkspace, /^allowBuilds:\n {2}sdenv: true$/m)
+  assert.equal((pnpmWorkspace.match(/^allowBuilds:/gm) || []).length, 1)
+})
+
+test('manifest declares the Node floor required by the semantic runtime', () => {
   assert.equal(root.engines.node, '>=24.15.0')
 })
 

@@ -30,8 +30,6 @@ export function createSessionPaths(sessionId, { root = DEFAULT_SESSION_ROOT } = 
     runs: join(sessionRoot, 'runs'),
     validations: join(sessionRoot, 'validations'),
     solvers: join(sessionRoot, 'solvers'),
-    output: join(sessionRoot, 'output'),
-    rebuild: join(sessionRoot, 'rebuild'),
     screenshots: join(sessionRoot, 'screenshots'),
     browserData: join(sessionRoot, 'browser-data'),
   }
@@ -48,8 +46,6 @@ export function ensureSessionPaths(paths) {
     paths.runs,
     paths.validations,
     paths.solvers,
-    paths.output,
-    paths.rebuild,
     paths.screenshots,
     paths.browserData,
   ].forEach(ensureSecureDir)

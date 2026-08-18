@@ -118,19 +118,18 @@ collect_property({ path: 'screen.height' })
 
 ## 补环境拟合策略
 
-保留 `target.original.js` 和动态证据。环境差异写入 `recipe.json`；确需站点特定源码处理时写 `target.working.js` 和 `transforms.json`，不得覆盖原文。
+保留捕获源码和动态证据的 `observed` Artifact。环境差异写入当前 Session 的 Runtime Recipe；确需站点特定源码处理时创建 `derived` Artifact，并记录来源与哈希，不得覆盖原文。
 
 ```text
-list_scripts
-→ export_rebuild_bundle({ taskId, scriptId, callExpression })
-→ node runner.mjs --mode probe
-→ analyze_runtime_trace({ taskId, runId })
-→ collect_property({ path })
-→ 更新 recipe.json
-→ node runner.mjs --mode verify
+明确 Cookie Output Contract
+→ recover_target_output({ mode: "auto" })
+→ 按首个 environment / resource blocker 调用 collect_property 或 Hook
+→ 更新当前 Runtime Recipe
+→ 再次 recover_target_output
+→ Worker 生成值通过真实请求验证为 reproduced
 ```
 
-`probe` 用于形成假设，不能作为验证通过依据。只有 sessionId、scriptId、原始/工作目标、Recipe、evidence 和 runner 哈希一致的 `verify` 结果才能进入 Proven Facts。
+浏览器与 Hook 只用于形成证据。只有同一 Session 的 Contract、Recipe、Worker Run 和 Validation 身份一致，且真实请求为 `reproduced`，结果才能进入 Proven Facts。
 
 ---
 
@@ -162,7 +161,7 @@ basearr[5]  = screen.height
 在 Node.js 补环境代码中，精确填充每个槽位：
 
 ```javascript
-// rebuild/env-patch.js
+// Runtime Recipe 或算法实现中的已证实槽位
 const basearr = new Array(200).fill(0);
 basearr[0] = process.env.CANVAS_FINGERPRINT;  // 从真实浏览器采集
 basearr[1] = "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11...)";
@@ -181,8 +180,7 @@ basearr[5] = 1080;
 // 1. 真实浏览器生成的 Cookie（通过 get_storage 获取）
 const realCookie = "TS01a2b3c4=xxx...";
 
-// 2. Node.js 执行补环境代码生成的 Cookie
-// node rebuild/run.js
+// 2. 独立 Worker 或 Solver 生成的 Cookie
 const nodeCookie = "TS01a2b3c4=yyy...";
 ```
 
@@ -216,8 +214,7 @@ const nodeCookie = "TS01a2b3c4=yyy...";
 |------|-------------|
 | `collect_env` | 采集真实浏览器完整环境快照 |
 | `collect_property` | 精确采集 trace 中出现的浏览器属性 |
-| `analyze_runtime_trace` | 对 probe trace 的首次分歧进行分类 |
-| `export_rebuild_bundle` | 按当前会话和精确脚本导出不可变目标 bundle |
+| `recover_target_output` | 独立生成 Cookie 并通过真实请求验证 |
 | `set_breakpoint_on_text` | 定位 basearr 赋值行，建立槽位映射 |
 | `evaluate_on_callframe` | 断点时检查 basearr 当前状态 |
 | `get_storage` | 获取真实浏览器 Cookie 用于对比验证 |

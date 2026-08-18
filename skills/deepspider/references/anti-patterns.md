@@ -96,7 +96,7 @@
 **正确做法**：
 - VM 混淆的目标函数**有确定的输入输出**，不需要理解 VM 内部
 - 用 `inject_hook` 在 VM 包装函数出入口记录 IO
-- 无法 Hook 时，用 `/ds:rebuild` 导出补环境项目，让真实 JS 在 Node.js 中运行
+- 无法 Hook 时，调用 `recover_target_output` 让真实 JS 在独立 Worker 中运行
 - 只关注"VM 接收什么，返回什么"，不关注"VM 内部怎么运行"
 
 **检测信号**：在理解 opcode 含义上花时间。
@@ -131,7 +131,7 @@
 - 10 次报错后仍在猜测补什么
 
 **正确做法**：
-1. 先运行 probe 并用 `analyze_runtime_trace` 找到最高优先级环境分歧
+1. 先调用 `recover_target_output`，只处理返回的首个 environment blocker
 2. 用 `collect_property({ path })` 从真实浏览器采集该 API 的真实值
 3. 按真实值补丁，而非猜测
 
@@ -176,11 +176,11 @@
 
 ### AP-RT4：Unrecorded-target-mutation（无记录修改目标）
 
-**描述**：覆盖 `target.original.js` 或动态证据，或直接创建工作源码却不记录变换 hash 链。
+**描述**：覆盖捕获源码或动态证据，或创建派生源码却不记录来源和 hash 链。
 
-**正确做法**：原始证据只读；诊断用 Probe、CDP 断点或 inspector。确需格式化、去混淆、固定替换时写 `target.working.js`，并在 `transforms.json` 记录输入和输出 SHA-256。
+**正确做法**：原始证据只读；诊断用 Hook、CDP 断点或 inspector。确需格式化、去混淆、固定替换时创建 `derived` Artifact，并记录来源 Artifact ID、变换说明和输入输出 SHA-256。
 
-**检测信号**：原始 hash 改变，或 Runner 发现 working source 没有完整 transforms 链。
+**检测信号**：原始 hash 改变，或派生 Artifact 没有可追溯来源。
 
 ---
 
@@ -188,9 +188,9 @@
 
 **描述**：Probe Hook 或 Proxy 下输出正确，就直接写入 Proven Facts。
 
-**正确做法**：Probe 只形成 Hypothesis；关闭侵入式探针后用 `--mode verify` 重新证明。
+**正确做法**：Probe 只形成 Hypothesis；由独立 Worker 生成输出并通过真实请求验证为 `reproduced`。
 
-**检测信号**：Proven Facts 没有 verify runId 和 Target SHA-256。
+**检测信号**：Proven Facts 没有 Validation Artifact 和 Output Contract hash。
 
 ---
 
@@ -198,7 +198,7 @@
 
 **描述**：把 process、Buffer、require、module、global 等对象留在目标 realm。
 
-**正确做法**：使用干净 vm realm，只注入目标实际需要的浏览器环境。
+**正确做法**：使用 Session-owned Worker，只注入目标实际需要的浏览器语义。
 
 **检测信号**：目标脚本中 `typeof process` 或 `typeof global` 不是 `undefined`。
 

@@ -1,64 +1,55 @@
-# Runtime 阶段：找到首次环境分歧
+# Runtime 阶段：定位独立执行的首个阻塞项
 
-Runtime 阶段的目标是让捕获脚本在隔离的 jsdom Realm 中运行，并把浏览器与本地环境的首次行为分歧转成可验证的 `recipe.json` 规则。
+Runtime 阶段的目标是让 Session-owned Worker 独立生成 Output Contract 指定的值，并由真实请求验证为 `reproduced`。浏览器只提供对照证据。
 
-## 1. 导出精确证据包
+## 1. 建立恢复任务
 
-先用 `list_scripts` 选择当前 Session 的 scriptId，再调用：
+明确 URL、输出类型和可选 selector 后调用：
 
 ```text
-export_rebuild_bundle({
-  taskId: "target-20260817-01",
-  scriptId: "<current script id>",
-  callExpression: "window.generate(input)"
+recover_target_output({
+  url: "https://example.test/",
+  outputKind: "cookie",
+  mode: "auto"
 })
 ```
 
-必须记录 manifest 的 sessionId、scriptId、`target.original.js` SHA-256、Recipe SHA-256 和各 evidence hash。`evidence/network/responses.json` 保存可用于 fetch/XHR 的精确重放样本。
+Contract、Runtime Recipe、Run、Generated Output、Validation 和 Solver 都归属当前 Session。Agent 只接收阶段状态、证据等级、首个 blocker、Solver Artifact ID 和下一动作；完整源码、Cookie 与运行日志留在 Artifact Store。
 
-## 2. Probe
+## 2. 按 blocker 诊断
 
-```bash
-node runner.mjs --mode probe
-```
+| blocker | 说明 | 最小动作 |
+|---|---|---|
+| `environment` | Worker 缺少或错误实现浏览器语义 | 用 `collect_property`、Hook 或 Debugger 采集精确事实，更新 Runtime Recipe |
+| `resource` | 页面依赖或验证请求不可用 | 核对资源发起方、请求头、响应和网络可达性 |
+| `validation` | 已生成输出但真实请求不接受 | 核对 Output Contract、请求模板与成功条件 |
+| `program` | 当前语义引擎不能执行目标行为 | 用户同意后升级 `mode: "algorithm"`，只恢复输出相关切片 |
 
-然后调用：
+不要把网络、DNS 或 TLS 异常误判成输出不匹配。只有收到真实响应但不满足成功条件时，才属于 validation blocker。
 
-```text
-analyze_runtime_trace({ taskId, runId })
-```
+## 3. 更新 Runtime Recipe
 
-Probe 用于发现 Node identity、runtime artifact、source integrity、brand/descriptor、缺失属性、值差异、replay miss、异常和超时。相同 category、operation、path、caller 会聚合计数，不应靠海量重复日志判断。
+Recipe 只接受当前引擎支持的声明式配置：
 
-## 3. 取证并更新 Recipe
+- `fixedValues`：已证实且必须固定的属性值；
+- `conceal`：已确认需要隐藏的属性路径；
+- `windowProxyConfig`：运行时 proxy 行为；
+- `userAgent`、`strictSSL`、`timeoutMs`：请求与执行边界。
 
-对工具返回的最高优先级差异：
+每轮只改变与首个 blocker 对应的一组规则。站点、Cookie 名称和风控厂商不进入底层分支。
 
-1. 用 `collect_property` 采集主 frame 或 iframe 的完整属性事实；
-2. 必要时重新触发请求，补齐 `evidence/network/responses.json`；
-3. 在 `recipe.json` 中增加最小规则；
-4. 可确认的 jsdom 属性名隐藏、固定值或站点规则允许直接使用，但要保留来源和验证结果；
-5. 重新 Probe，继续到下一个首次分歧。
+## 4. 证据与源码规则
 
-当前 Patchright Session 可能带有自动化特征。对敏感指纹应使用普通 Chrome 或多 Session 交叉样本，而不是把当前页面值无条件当作真值。
+Browser Oracle 的脚本、响应和动态源码保持为不可变 `observed` Artifact。源码处理必须产生 `derived` Artifact 并保留来源与哈希。不要直接修改待执行的捕获源码，也不要把完整 Trace 塞进 Agent 上下文。
 
-## 4. 工作源码规则
+## 5. 完成门
 
-`target.original.js` 是只读证据。源码格式化、去混淆和必要的站点特定处理写入 `target.working.js`，同时更新 `transforms.json` 的输入/输出 SHA-256 链。Runner 只执行通过完整链验证的工作源码。
+必须同时满足：
 
-不得覆盖原始证据或修改 `evidence/dynamic/<sha256>.js`。未记录的 working source 会被拒绝。
+- Worker 使用全新状态生成目标输出；
+- 生成值不是从 Patchright Cookie 或 browser-data 读取；
+- CycleTLS 真实请求满足状态与内容契约；
+- Validation 等级为 `reproduced`；
+- Solver Artifact 可在没有关联浏览器时重跑。
 
-## 5. Verify
-
-```bash
-node runner.mjs --mode verify
-```
-
-Verify 不加载 Probe。只有以下条件同时成立，结果才能进入 Proven Facts：
-
-- 原始目标、working transforms、Recipe 和 evidence hash 全部有效；
-- replay 没有未解释的 miss；
-- 多组输入与浏览器对照结果一致；
-- 最终非浏览器请求得到预期业务响应。
-
-Browser output alone is not completion. Probe 通过、页面内 fetch 成功或 DOM 能取到数据，都不能代替 offline request-level verification。
+页面内请求成功、DOM 可读或 Browser Oracle 生成目标值，都不能替代这个完成门。

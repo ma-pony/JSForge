@@ -1,3 +1,5 @@
+allowBuilds:
+  sdenv: true
 minimumReleaseAgeExclude:
   - '@deepseek-ai/*'
   - form-data@4.0.6

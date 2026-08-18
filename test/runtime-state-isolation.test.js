@@ -132,7 +132,6 @@ test('MCP contexts expose two real Runtimes whose browser and debugger state is 
   first.cdpState.currentCallFrames.push({ callFrameId: 'call-a' })
   first.cdpState.activeBreakpoints.push({ breakpointId: 'break-a' })
   first.selectedTarget = { scriptId: 'script-a' }
-  first.rebuildContext = { taskId: 'rebuild-a' }
 
   assert.deepEqual(second.activeFrame, { frameId: null, contextId: null })
   assert.equal(second.captures.savedSessionState, null)
@@ -146,7 +145,6 @@ test('MCP contexts expose two real Runtimes whose browser and debugger state is 
   assert.deepEqual(second.cdpState.currentCallFrames, [])
   assert.deepEqual(second.cdpState.activeBreakpoints, [])
   assert.equal(second.selectedTarget, null)
-  assert.equal(second.rebuildContext, null)
 
   await manager.closeAll()
 })

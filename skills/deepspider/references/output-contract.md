@@ -47,22 +47,25 @@
 }
 ```
 
-## /ds:rebuild 输出必含字段
+## `recover_target_output` 输出必含字段
 
 ```json
 {
-  "task_dir": "项目路径",
-  "session_id": "浏览器捕获会话",
-  "script_id": "精确脚本 ID",
-  "original_target_sha256": "原始目标源码哈希",
-  "selected_target_sha256": "实际执行源码哈希",
-  "recipe_sha256": "Environment Recipe 哈希",
-  "network_replay_sha256": "网络重放证据哈希",
-  "runner_sha256": "runner.mjs 哈希",
-  "probe_run": "Probe run ID",
-  "verify_run": "Verify run ID",
-  "run_command": "node runner.mjs --mode verify",
-  "verified": true
+  "stages": {
+    "browserEvidence": "complete",
+    "artifactGraph": "complete",
+    "nodeGeneration": "complete",
+    "requestValidation": "complete"
+  },
+  "evidenceLevels": {
+    "browser": "observed",
+    "node": "reproduced",
+    "request": "reproduced"
+  },
+  "strategy": "semantic-runtime",
+  "blocker": null,
+  "solverId": "artifact identifier",
+  "nextAction": null
 }
 ```
 
@@ -154,7 +157,7 @@ locate-complete        ← writer/builder/entry/source 四层定位完成
     ↓
 recover-complete       ← 加密逻辑或 bridging contract 提取完成
     ↓
-runtime-complete       ← 不可变 bundle 的 verify 与浏览器输出一致
+runtime-complete       ← 独立 Worker 生成输出且真实请求达到 reproduced
     ↓
 extraction-complete    ← pure-crypto.js 通过所有 fixture 验证
     ↓
