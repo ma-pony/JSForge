@@ -79,13 +79,27 @@ export class SdenvRuntimeAdapter {
       recipe: validateRuntimeRecipe(recipe),
       runDir: safeRunDir,
     })
-    if (signal?.aborted) return failedResult(runId, 'runtime-aborted', abortReason(signal))
+    const record = this.#createRecord(request, signal)
+    this.active.set(runId, record)
+    record.watchAbort()
 
-    await mkdir(safeRunDir, { recursive: true, mode: 0o700 })
-    if (this.closed) return failedResult(runId, 'runtime-terminated', 'Recovery runtime closed')
-    await writeFile(join(safeRunDir, 'request.json'), `${JSON.stringify(request)}\n`, { mode: 0o600 })
-    if (this.closed) return failedResult(runId, 'runtime-terminated', 'Recovery runtime closed')
-    return this.#spawnWorker(request, signal)
+    if (record.terminating) return record.promise
+    try {
+      await mkdir(safeRunDir, { recursive: true, mode: 0o700 })
+      if (record.terminating || this.closed) {
+        void record.terminate('Recovery runtime closed')
+        return record.promise
+      }
+      await writeFile(join(safeRunDir, 'request.json'), `${JSON.stringify(request)}\n`, { mode: 0o600 })
+      if (record.terminating || this.closed) {
+        void record.terminate('Recovery runtime closed')
+        return record.promise
+      }
+      record.spawn()
+    } catch (error) {
+      void record.finish(failedResult(runId, 'worker-preparation-error', error.message))
+    }
+    return record.promise
   }
 
   close(reason = 'Recovery runtime closed') {
@@ -96,81 +110,92 @@ export class SdenvRuntimeAdapter {
     return this.closePromise
   }
 
-  #spawnWorker(request, signal) {
-    return new Promise((resolveResult) => {
-      let child
-      let stdout = ''
-      let stderr = ''
-      let finished = false
-      let timer
-      let terminating = false
-      const runDir = request.runDir
+  #createRecord(request, signal) {
+    let child
+    let stdout = ''
+    let stderr = ''
+    let finished = false
+    let timer
+    let resolveResult
+    const record = {
+      terminating: false,
+      promise: new Promise((resolve) => { resolveResult = resolve }),
+    }
+    const onAbort = () => {
+      void record.terminate(abortReason(signal), 'runtime-aborted')
+    }
 
-      const finish = async (result) => {
-        if (finished) return
-        finished = true
-        clearTimeout(timer)
-        signal?.removeEventListener('abort', onAbort)
-        this.active.delete(request.runId)
-        try {
-          await writeFile(join(runDir, 'result.json'), `${JSON.stringify(result)}\n`, { mode: 0o600 })
-          if (stderr) await writeFile(join(runDir, 'stderr.log'), stderr, { mode: 0o600 })
-        } catch {
-          // The result still reaches the Session caller if diagnostics cannot be persisted.
-        }
-        resolveResult(result)
+    record.finish = async (result) => {
+      if (finished) return record.promise
+      finished = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      if (this.active.get(request.runId) === record) this.active.delete(request.runId)
+      try {
+        await writeFile(join(request.runDir, 'result.json'), `${JSON.stringify(result)}\n`, { mode: 0o600 })
+        if (stderr) await writeFile(join(request.runDir, 'stderr.log'), stderr, { mode: 0o600 })
+      } catch {
+        // The result still reaches the Session caller if diagnostics cannot be persisted.
       }
+      resolveResult(result)
+      return record.promise
+    }
 
-      const terminate = async (reason, category = 'runtime-terminated') => {
-        if (finished || terminating) return
-        terminating = true
-        if (child && child.exitCode == null) child.kill('SIGTERM')
-        await delay(TERMINATION_GRACE_MS)
-        if (child && child.exitCode == null) child.kill('SIGKILL')
-        await finish(failedResult(request.runId, category, String(reason)))
+    record.terminate = async (reason, category = 'runtime-terminated') => {
+      if (finished || record.terminating) return record.promise
+      record.terminating = true
+      if (!child) return record.finish(failedResult(request.runId, category, String(reason)))
+      if (child.exitCode == null) child.kill('SIGTERM')
+      await delay(TERMINATION_GRACE_MS)
+      if (child.exitCode == null) child.kill('SIGKILL')
+      return record.finish(failedResult(request.runId, category, String(reason)))
+    }
+
+    record.watchAbort = () => {
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) onAbort()
+    }
+
+    record.spawn = () => {
+      if (record.terminating || this.closed) {
+        void record.terminate('Recovery runtime closed')
+        return
       }
-
-      const onAbort = () => {
-        void terminate(abortReason(signal), 'runtime-aborted')
-      }
-
       try {
         child = this.spawnImpl(process.execPath, [WORKER_PATH], {
           shell: false,
           stdio: ['pipe', 'pipe', 'pipe'],
           env: workerEnvironment(this.env),
         })
-        this.active.set(request.runId, { terminate })
         child.stdout.on('data', (chunk) => { stdout += chunk })
         child.stderr.on('data', (chunk) => { stderr += chunk })
         child.once('error', (error) => {
-          void finish(failedResult(request.runId, 'worker-spawn-error', error.message))
+          void record.finish(failedResult(request.runId, 'worker-spawn-error', error.message))
         })
         child.once('close', () => {
-          if (finished || terminating) return
+          if (finished || record.terminating) return
           const lines = stdout.trim().split(/\r?\n/).filter(Boolean)
           if (lines.length !== 1) {
-            void finish(failedResult(request.runId, 'worker-protocol-error', 'Worker must emit exactly one JSON result line'))
+            void record.finish(failedResult(request.runId, 'worker-protocol-error', 'Worker must emit exactly one JSON result line'))
             return
           }
           try {
             const result = validateWorkerResult(JSON.parse(lines[0]))
-            if (result.runId !== request.runId) {
-              throw new Error('Worker result runId does not match request')
-            }
-            void finish(result)
+            if (result.runId !== request.runId) throw new Error('Worker result runId does not match request')
+            void record.finish(result)
           } catch (error) {
-            void finish(failedResult(request.runId, 'worker-protocol-error', error.message))
+            void record.finish(failedResult(request.runId, 'worker-protocol-error', error.message))
           }
         })
         child.stdin.end(`${JSON.stringify(request)}\n`)
         timer = setTimeout(() => {
-          void terminate(`Worker exceeded ${request.recipe.timeoutMs}ms`, 'runtime-timeout')
+          void record.terminate(`Worker exceeded ${request.recipe.timeoutMs}ms`, 'runtime-timeout')
         }, request.recipe.timeoutMs + TERMINATION_GRACE_MS)
-        signal?.addEventListener('abort', onAbort, { once: true })
+        if (signal?.aborted) onAbort()
       } catch (error) {
-        void finish(failedResult(request.runId, 'worker-spawn-error', error.message))
+        void record.finish(failedResult(request.runId, 'worker-spawn-error', error.message))
       }
-    })
+    }
+    return record
   }
 }

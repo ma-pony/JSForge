@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 
 import { validateWorkerRequest } from './protocol.js'
 
@@ -44,13 +45,12 @@ function applyFixedValues(window, values) {
   }
 }
 
-function applyConcealment(window, paths, windowProxyConfig) {
+export function applyConcealment(window, paths, windowProxyConfig) {
   for (const path of paths) {
     const parent = resolvePathParent(window, path)
     if (parent) {
       const descriptor = Object.getOwnPropertyDescriptor(parent.target, parent.property)
-      if (!descriptor || descriptor.configurable) {
-        Reflect.deleteProperty(parent.target, parent.property)
+      if (descriptor?.configurable && Reflect.deleteProperty(parent.target, parent.property) && !Reflect.has(parent.target, parent.property)) {
         continue
       }
     }
@@ -165,4 +165,4 @@ async function main() {
   }
 }
 
-await main()
+if (process.argv[1] === fileURLToPath(import.meta.url)) await main()

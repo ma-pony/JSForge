@@ -1,7 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { PassThrough } from 'node:stream'
 import { setImmediate } from 'node:timers/promises'
 
+import { createOutputContract } from '../src/recovery/contracts.js'
+import { createRuntimeRecipe } from '../src/recovery/recipe.js'
+import { SdenvRuntimeAdapter } from '../src/recovery/runtime/sdenv-adapter.js'
+import { applyConcealment } from '../src/recovery/runtime/worker.mjs'
 import { DeepSpiderRuntime } from '../src/runtime/DeepSpiderRuntime.js'
 import { RuntimeManager } from '../src/runtime/RuntimeManager.js'
 
@@ -20,6 +29,34 @@ function createRuntime(id, { close } = {}) {
     id,
     close: close || (async () => {}),
   }
+}
+
+function recoveryInput(runId, signal) {
+  return {
+    runId,
+    signal,
+    contract: createOutputContract({
+      kind: 'cookie',
+      entryUrl: 'https://example.test/',
+      request: { url: 'https://example.test/', method: 'GET' },
+      success: {},
+    }),
+    recipe: createRuntimeRecipe(),
+  }
+}
+
+function stalledWorker() {
+  const child = new EventEmitter()
+  child.stdin = new PassThrough()
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  child.exitCode = null
+  child.kills = []
+  child.kill = (signal) => {
+    child.kills.push(signal)
+    return true
+  }
+  return child
 }
 
 test('DeepSpiderRuntime owns explicit session state and launches its browser lazily', async () => {
@@ -143,6 +180,66 @@ test('DeepSpiderRuntime creates and closes its Session recovery runtime before t
   await runtime.getBrowserClient()
   await runtime.close('session disposed')
   assert.deepEqual(events, ['recovery:close', 'browser:close'])
+})
+
+test('SdenvRuntimeAdapter reserves a run ID before asynchronous preparation', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-sdenv-adapter-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const children = []
+  const spawned = deferred()
+  const adapter = new SdenvRuntimeAdapter({
+    sessionId: 'adapter-concurrency',
+    runsDir: root,
+    spawnImpl: () => {
+      const child = stalledWorker()
+      children.push(child)
+      spawned.resolve()
+      return child
+    },
+  })
+
+  const first = adapter.execute(recoveryInput('same-run'))
+  await assert.rejects(adapter.execute(recoveryInput('same-run')), /already active/)
+  await spawned.promise
+  assert.equal(adapter.active.size, 1)
+
+  const [result] = await Promise.all([first, adapter.close('test close')])
+  assert.equal(result.ok, false)
+  assert.equal(children.length, 1)
+  assert.deepEqual(children[0].kills, ['SIGTERM', 'SIGKILL'])
+})
+
+test('SdenvRuntimeAdapter aborts during asynchronous preparation before spawning', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-sdenv-abort-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  let spawns = 0
+  const adapter = new SdenvRuntimeAdapter({
+    sessionId: 'adapter-abort',
+    runsDir: root,
+    spawnImpl: () => {
+      spawns += 1
+      return stalledWorker()
+    },
+  })
+  const controller = new globalThis.AbortController()
+
+  const pending = adapter.execute(recoveryInput('abort-before-spawn', controller.signal))
+  controller.abort(new Error('cancel during preparation'))
+  const result = await pending
+
+  assert.equal(spawns, 0)
+  assert.equal(result.ok, false)
+  assert.equal(result.unknowns[0].category, 'runtime-aborted')
+})
+
+test('Sdenv concealment adds inherited properties to the undefined-key rule', () => {
+  const window = Object.create({ inheritedFingerprint: 'visible through prototype' })
+  const windowProxyConfig = {}
+
+  applyConcealment(window, ['inheritedFingerprint'], windowProxyConfig)
+
+  assert.equal(window.inheritedFingerprint, 'visible through prototype')
+  assert.deepEqual(windowProxyConfig.windowGetterUndefinedKeys, ['inheritedFingerprint'])
 })
 
 test('already-aborted Runtime wait consumes a controlled promise that rejects later', async () => {
