@@ -30,9 +30,11 @@ test('manifest has the exact direct runtime dependency surface', () => {
     '@deepseek-ai/dsh-llm',
     '@deepseek-ai/dsh-tools',
     '@modelcontextprotocol/sdk',
+    'acorn',
     'cycletls',
     'jsdom',
     'patchright',
+    'sdenv',
     'zod',
   ])
 })
@@ -55,6 +57,10 @@ test('manifest declares the native DSH package channel policy', () => {
   assert.equal(root.dependencies['@deepseek-ai/dsh-host-apiproxy'], 'next')
   assert.equal(root.dependencies['@deepseek-ai/dsh-llm'], 'next')
   assert.equal(root.dependencies['@deepseek-ai/dsh-tools'], 'next')
+})
+
+test('manifest declares the reviewed semantic runtime channel', () => {
+  assert.equal(root.dependencies.sdenv, 'latest')
 })
 
 test('manifest requires the audited MCP SDK release line', () => {

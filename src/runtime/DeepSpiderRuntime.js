@@ -1,4 +1,5 @@
 import { BrowserClient } from '../browser/client.js'
+import { SdenvRuntimeAdapter } from '../recovery/runtime/sdenv-adapter.js'
 import { SessionArtifactStore } from '../store/SessionArtifactStore.js'
 
 function abortError(reason) {
@@ -51,6 +52,7 @@ export class DeepSpiderRuntime {
     paths,
     browserFactory = ({ dataStore }) => new BrowserClient({ dataStore }),
     dataStoreFactory = ({ paths }) => new SessionArtifactStore({ root: paths.evidence }),
+    recoveryRuntimeFactory = ({ sessionId, runsDir, env }) => new SdenvRuntimeAdapter({ sessionId, runsDir, env }),
     env = process.env,
     onDialogMessage = null,
   }) {
@@ -60,8 +62,8 @@ export class DeepSpiderRuntime {
     if (!paths || typeof paths !== 'object') {
       throw new TypeError('paths must be provided')
     }
-    if (typeof browserFactory !== 'function' || typeof dataStoreFactory !== 'function') {
-      throw new TypeError('browserFactory and dataStoreFactory must be functions')
+    if (typeof browserFactory !== 'function' || typeof dataStoreFactory !== 'function' || typeof recoveryRuntimeFactory !== 'function') {
+      throw new TypeError('browserFactory, dataStoreFactory and recoveryRuntimeFactory must be functions')
     }
 
     this.sessionId = sessionId
@@ -69,10 +71,12 @@ export class DeepSpiderRuntime {
     this.env = env
     this.browserFactory = browserFactory
     this.dataStoreFactory = dataStoreFactory
+    this.recoveryRuntimeFactory = recoveryRuntimeFactory
     this.dataStore = dataStoreFactory({ sessionId, paths, env })
     this.onDialogMessage = onDialogMessage
 
     this.browserClient = null
+    this.recoveryRuntime = null
     this.page = null
     this.cdpSession = null
     this.activeFrame = { frameId: null, contextId: null }
@@ -128,6 +132,21 @@ export class DeepSpiderRuntime {
     const client = await waitFor(this._browserPromise, { signal })
     throwIfAborted(signal)
     return client
+  }
+
+  getRecoveryRuntime() {
+    if (this._closed) throw abortError(this._lifetime.signal.reason || 'Runtime is closed')
+    if (this.recoveryRuntime) return this.recoveryRuntime
+    const runtime = this.recoveryRuntimeFactory({
+      sessionId: this.sessionId,
+      runsDir: this.paths.runs,
+      env: this.env,
+    })
+    if (!runtime || typeof runtime.execute !== 'function' || typeof runtime.close !== 'function') {
+      throw new TypeError('recoveryRuntimeFactory must return a Recovery Runtime')
+    }
+    this.recoveryRuntime = runtime
+    return runtime
   }
 
   async getPage({ signal } = {}) {
@@ -304,6 +323,13 @@ export class DeepSpiderRuntime {
 
   async _closeOwnedResources(reason) {
     const errors = []
+    if (this.recoveryRuntime) {
+      try {
+        await this.recoveryRuntime.close(reason)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
     let client = this.browserClient || this._pendingBrowser
 
     if (this._browserPromise) {
@@ -331,6 +357,7 @@ export class DeepSpiderRuntime {
     }
 
     this.browserClient = null
+    this.recoveryRuntime = null
     this.page = null
     this.cdpSession = null
 

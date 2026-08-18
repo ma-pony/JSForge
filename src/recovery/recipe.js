@@ -5,6 +5,7 @@ const DEFAULT_RECIPE = Object.freeze({
   networkMode: 'same-site-live',
   strictSSL: false,
   timeoutMs: 10000,
+  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
   fixedValues: Object.freeze({}),
   conceal: Object.freeze([]),
   windowProxyConfig: Object.freeze({}),
@@ -38,11 +39,15 @@ export function validateRuntimeRecipe(value) {
   if (input.networkMode !== 'same-site-live') throw new TypeError('Runtime recipe networkMode must be same-site-live')
   if (typeof input.strictSSL !== 'boolean') throw new TypeError('Runtime recipe strictSSL must be a boolean')
   if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) throw new TypeError('Runtime recipe timeoutMs must be a positive number')
+  if (typeof input.userAgent !== 'string' || input.userAgent.length === 0) {
+    throw new TypeError('Runtime recipe userAgent must be a non-empty string')
+  }
   return {
     engine: input.engine,
     networkMode: input.networkMode,
     strictSSL: input.strictSSL,
     timeoutMs: input.timeoutMs,
+    userAgent: input.userAgent,
     fixedValues: plainObject(input.fixedValues, 'Runtime recipe fixedValues'),
     conceal: concealPaths(input.conceal),
     windowProxyConfig: plainObject(input.windowProxyConfig, 'Runtime recipe windowProxyConfig'),

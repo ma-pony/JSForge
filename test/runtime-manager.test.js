@@ -112,6 +112,39 @@ test('DeepSpiderRuntime closes a lazily created browser only once', async () => 
   assert.equal(closes, 1)
 })
 
+test('DeepSpiderRuntime creates and closes its Session recovery runtime before the browser', async () => {
+  const events = []
+  let recoveryFactoryCalls = 0
+  const runtime = new DeepSpiderRuntime({
+    sessionId: 'recovery-session',
+    paths: {
+      runs: '/sessions/recovery-session/runs',
+      browserData: '/sessions/recovery-session/browser-data',
+    },
+    browserFactory: () => ({
+      launch: async () => {},
+      close: async () => events.push('browser:close'),
+    }),
+    dataStoreFactory: () => ({}),
+    recoveryRuntimeFactory: ({ sessionId, runsDir }) => {
+      recoveryFactoryCalls += 1
+      assert.equal(sessionId, 'recovery-session')
+      assert.equal(runsDir, '/sessions/recovery-session/runs')
+      return {
+        execute: async () => {},
+        close: async () => events.push('recovery:close'),
+      }
+    },
+  })
+
+  assert.equal(recoveryFactoryCalls, 0)
+  assert.equal(runtime.getRecoveryRuntime(), runtime.getRecoveryRuntime())
+  assert.equal(recoveryFactoryCalls, 1)
+  await runtime.getBrowserClient()
+  await runtime.close('session disposed')
+  assert.deepEqual(events, ['recovery:close', 'browser:close'])
+})
+
 test('already-aborted Runtime wait consumes a controlled promise that rejects later', async () => {
   const runtime = new DeepSpiderRuntime({
     sessionId: 'already-aborted-wait',

@@ -60,9 +60,11 @@
     "@deepseek-ai/dsh-llm": "next",
     "@deepseek-ai/dsh-tools": "next",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "acorn": "^8.18.0",
     "cycletls": "^2.0.5",
     "jsdom": "30.0.1",
     "patchright": "^1.57.0",
+    "sdenv": "latest",
     "zod": "^4.3.6"
   },
   "devDependencies": {
