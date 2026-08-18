@@ -25,14 +25,15 @@ description: JS 逆向工程全流程技能 — 从请求追踪到 Python 爬虫
 
 ### Runtime 证据契约
 
-补环境以当前 Session 的证据包和 Environment Recipe 为中心：
+恢复以当前 Session 的 Browser Oracle 证据、Output Contract 和 Runtime Recipe 为中心：
 
-- 用精确 `scriptId` 执行 `export_rebuild_bundle`，保存 sessionId、scriptId 和 `target.original.js` 的 SHA-256。
-- `target.original.js` 永远只读；确需格式化、去混淆或站点特定替换时写入 `target.working.js`，并用 `transforms.json` 记录完整输入、输出 hash 链。
-- `recipe.json` 是唯一环境策略入口，可组合 jsdom baseline、Session 事实、属性证据、固定值、隐藏、Hook、网络 replay 和断言。
-- 固定流程为：导出证据 → `--mode probe` → `analyze_runtime_trace` → 补采事实/更新 Recipe → `--mode verify` → 非浏览器请求验证。
-- Probe 输出只能是 Hypothesis；只有 hash 有效且不加载 Probe 的 verify 结果才能进入 Proven Facts。
-- 不同 sessionId、scriptId、原始目标 hash 或 Recipe hash 的结果禁止直接比较，必须标记 Invalid。
+- 浏览器结果只标记为 `observed`，不能作为完成证据。
+- 输出类型明确后，优先调用 `recover_target_output`；输出类型不安全时先使用 DSH 原生选择题确定 `outputKind`。
+- 站点规则、固定值和属性隐藏只写入当前 Session 的 Runtime Recipe，不写进通用底层分支。
+- 只有独立 Node 运行时生成目标输出，并通过真实请求验证为 `reproduced`，才算完成。
+- `environment` / `resource` blocker 表示证据或 Recipe 缺口；此时才使用 Hook、Debugger、浏览器和文件工具补证据后重试。
+- `program` blocker 或用户明确要求纯算法时，才升级到 `mode: algorithm`。
+- 完整源码、Trace 和 Cookie 值保留在 Session Artifact 中，不放入 Agent 上下文。
 
 ---
 
@@ -49,8 +50,8 @@ intake → evidence → locate → recover → runtime → extraction → valida
 | **intake** | 收到目标 URL / 任务描述 | 明确目标请求、加密参数、触发路径 |
 | **evidence** | 浏览器已打开，开始操作 | 抓取网络请求，识别候选加密参数 |
 | **locate** | 发现加密参数，需定位源码 | 断点 + Call Stack 定位加密函数 |
-| **recover** | 找到加密函数，需还原逻辑 | 读取源码、去混淆、理解算法 |
-| **runtime** | 发现 VM 混淆 / 环境依赖 | 补环境或沙箱执行 |
+| **recover** | 找到加密函数，需还原逻辑 | 读取源码、建立输出驱动的语义模型 |
+| **runtime** | 发现 VM 混淆 / 环境依赖 | 语义切片、补环境或沙箱执行 |
 | **extraction** | 逻辑清晰，需提取实现 | 编写 Python 实现，验证输入输出 |
 | **validation** | 本地实现完成 | 非浏览器请求多样本验证，确认业务结果一致 |
 | **handoff** | 非浏览器验证通过 | 生成独立请求项目，输出报告 |
@@ -72,10 +73,10 @@ intake → evidence → locate → recover → runtime → extraction → valida
   → locate
 
 如果 已找到源码位置，尚未理解算法逻辑
-  → recover
+  → 明确目标输出后优先调用 recover_target_output({ mode: "auto" })
 
 如果 发现 VM 混淆 / 环境对象依赖 / eval 调用链
-  → runtime（可与 recover 并发）
+  → 先让 recover_target_output 区分 environment/resource/program blocker；仅按 blocker 补证据或升级算法
 
 如果 算法逻辑已明确，尚未写出 Python 实现
   → extraction

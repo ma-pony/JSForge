@@ -63,6 +63,50 @@ test('Dialog owns binding messages, sends JSON-owned payloads, and removes itsel
   assert.match(evaluations.at(-1)[0], /__deepspider_dialog_close__/)
 })
 
+test('Dialog keeps Recovery messages compact and reuses the native DSH question envelope', async () => {
+  const { cdp, evaluations, page } = harness()
+  const bridge = new DialogBridge()
+  await bridge.open({ page, cdp })
+
+  await bridge.send({
+    type: 'recovery/result',
+    stages: { browserEvidence: 'complete', requestValidation: 'complete' },
+    evidenceLevels: { browser: 'observed', request: 'reproduced' },
+    strategy: 'semantic-runtime',
+    blocker: null,
+    solverId: 'solver-1',
+    nextAction: null,
+    cookie: 'secret-cookie-value',
+    rawTrace: 'secret-trace',
+    source: 'secret-source',
+  })
+  assert.deepEqual(evaluations.at(-1)[1], {
+    type: 'recovery/result',
+    stages: { browserEvidence: 'complete', requestValidation: 'complete' },
+    evidenceLevels: { browser: 'observed', request: 'reproduced' },
+    strategy: 'semantic-runtime',
+    blocker: null,
+    solverId: 'solver-1',
+    nextAction: null,
+  })
+
+  await bridge.send({
+    type: 'question/requested',
+    rpcId: 'question-1',
+    questions: [{
+      id: 'recovery-output-kind',
+      header: '目标输出',
+      question: '选择需要独立生成的输出',
+      options: [{ label: 'cookie', description: 'Cookie output' }],
+    }],
+  })
+  assert.equal(evaluations.at(-1)[1].type, 'recovery/question')
+  assert.equal(evaluations.at(-1)[1].rpcId, 'question-1')
+  assert.deepEqual(evaluations.at(-1)[1].questions[0].options, [
+    { label: 'cookie', description: 'Cookie output' },
+  ])
+})
+
 test('analysis Dialog encodes one complete native DSH question batch', () => {
   const source = getAnalysisPanelScript()
 
@@ -73,6 +117,13 @@ test('analysis Dialog encodes one complete native DSH question batch', () => {
   assert.match(source, /selected/)
   assert.match(source, /custom/)
   assert.match(source, /deepspider-iframe-selection/)
+  assert.match(source, /recovery\/progress/)
+  assert.match(source, /recovery\/question/)
+  assert.match(source, /recovery\/result/)
+  assert.match(source, /browserEvidence/)
+  assert.match(source, /artifactGraph/)
+  assert.match(source, /nodeGeneration/)
+  assert.match(source, /requestValidation/)
 })
 
 test('browser_dialog opens interactively without activating Probe hooks', async () => {

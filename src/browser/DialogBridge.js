@@ -6,6 +6,55 @@ function ownedJson(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+function picked(value, fields) {
+  if (!value || typeof value !== 'object') return null
+  return Object.fromEntries(fields.filter((field) => field in value).map((field) => [field, value[field]]))
+}
+
+function compactQuestion(question) {
+  const value = picked(question, ['id', 'header', 'question', 'detail', 'multiSelect']) || {}
+  value.options = Array.isArray(question?.options)
+    ? question.options.map((option) => picked(option, ['label', 'description']) || {})
+    : []
+  return value
+}
+
+function compactRecoveryPayload(payload) {
+  if (
+    payload.type === 'question/requested'
+    && payload.questions?.length === 1
+    && payload.questions[0]?.id === 'recovery-output-kind'
+  ) {
+    return compactRecoveryPayload({ ...payload, type: 'recovery/question' })
+  }
+  if (payload.type === 'recovery/question') {
+    return {
+      type: payload.type,
+      rpcId: payload.rpcId,
+      questions: Array.isArray(payload.questions) ? payload.questions.map(compactQuestion) : [],
+    }
+  }
+  if (payload.type === 'recovery/progress') {
+    return {
+      type: payload.type,
+      stages: picked(payload.stages, ['browserEvidence', 'artifactGraph', 'nodeGeneration', 'requestValidation']) || {},
+      evidenceLevels: picked(payload.evidenceLevels, ['browser', 'node', 'request']) || {},
+    }
+  }
+  if (payload.type === 'recovery/result') {
+    return {
+      type: payload.type,
+      stages: picked(payload.stages, ['browserEvidence', 'artifactGraph', 'nodeGeneration', 'requestValidation']) || {},
+      evidenceLevels: picked(payload.evidenceLevels, ['browser', 'node', 'request']) || {},
+      strategy: payload.strategy ?? null,
+      blocker: picked(payload.blocker, ['kind', 'operation', 'reason']),
+      solverId: payload.solverId ?? null,
+      nextAction: payload.nextAction ?? null,
+    }
+  }
+  return payload
+}
+
 export class DialogBridge {
   constructor({ onMessage = null } = {}) {
     this.onMessage = onMessage
@@ -61,7 +110,7 @@ export class DialogBridge {
 
   async send(payload) {
     if (!this.page) return false
-    const value = ownedJson(payload)
+    const value = ownedJson(compactRecoveryPayload(payload))
     const receiver = `(payload) => globalThis.__deepspider_dialog_receive__?.(payload)`
     const frame = this.frames[0] || this.page
     await frame.evaluate(receiver, value)

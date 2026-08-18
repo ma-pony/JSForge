@@ -19,6 +19,7 @@ test('exports an immutable bundle from an exact current-session script ID', asyn
     mode: 'observe',
     page: { url: 'https://example.com/page', title: 'Fixture', referrer: '' },
     storage: { cookies: [], local: {}, session: {} },
+    probe: { referrer: '', local: {}, session: {} },
     document: { html: '<!doctype html><title>Fixture</title>' },
   }
   const store = {

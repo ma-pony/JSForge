@@ -10,18 +10,19 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8')
 }
 
-test('packaged skill preserves original evidence while allowing recorded working source', () => {
+test('packaged skill routes semantic recovery through one Session-owned high-level tool', () => {
   const skill = read('skills/deepspider/SKILL.md')
 
-  assert.match(skill, /probe/)
-  assert.match(skill, /verify/)
-  assert.match(skill, /target\.original\.js/)
-  assert.match(skill, /target\.working\.js/)
-  assert.match(skill, /transforms\.json/)
-  assert.match(skill, /Environment Recipe/)
-  assert.match(skill, /Proven Facts/)
-  assert.match(skill, /sessionId.*scriptId.*SHA-256/s)
-  assert.match(skill, /export_rebuild_bundle.*analyze_runtime_trace/s)
+  assert.match(skill, /recover_target_output/)
+  assert.match(skill, /Browser Oracle/)
+  assert.match(skill, /Output Contract/)
+  assert.match(skill, /Runtime Recipe/)
+  assert.match(skill, /observed/)
+  assert.match(skill, /reproduced/)
+  assert.match(skill, /DSH 原生选择题/)
+  assert.match(skill, /environment.*resource.*Hook.*Debugger/s)
+  assert.match(skill, /program.*mode: algorithm/s)
+  assert.doesNotMatch(skill, /analyze_script_semantics|export_rebuild_bundle|analyze_runtime_trace/)
 })
 
 test('runtime references use Recipe, probe, replay, and offline verify', () => {

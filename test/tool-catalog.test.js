@@ -335,6 +335,7 @@ test('the central catalog derives its published count from the tool groups', () 
     'collect_property',
     'export_rebuild_bundle',
     'analyze_runtime_trace',
+    'recover_target_output',
   ])
   for (const definition of deepSpiderCatalog) {
     assert.equal(Object.isFrozen(definition), true)
