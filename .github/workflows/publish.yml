@@ -24,6 +24,7 @@ jobs:
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm rebuild sdenv
       - run: pnpm test
       - run: pnpm lint
       - run: pnpm audit --prod --audit-level high

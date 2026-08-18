@@ -11,6 +11,19 @@ const installDir = path.join(tempRoot, 'install')
 const npmEnv = { ...process.env, npm_config_cache: path.join(tempRoot, 'npm-cache') }
 fs.mkdirSync(installDir)
 
+function readSourceTree(root) {
+  const sources = []
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const target = path.join(directory, entry.name)
+      if (entry.isDirectory()) visit(target)
+      else if (/\.(?:js|mjs)$/.test(entry.name)) sources.push(fs.readFileSync(target, 'utf8'))
+    }
+  }
+  visit(root)
+  return sources.join('\n')
+}
+
 try {
   const packed = JSON.parse(
     execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', tempRoot], {
@@ -35,8 +48,10 @@ try {
     'README.md',
     'README_EN.md',
     'src/browser/DialogBridge.js',
-    'src/rebuild/environment/compiler.js',
-    'src/rebuild/environment/chrome-baseline.js',
+    'src/recovery/coordinator.js',
+    'src/recovery/runtime/sdenv-adapter.js',
+    'src/recovery/runtime/worker.mjs',
+    'src/recovery/solver.js',
     'dsh/cordis.patch.yml',
     'dsh/agent-presets/spider/agent.cordis.yml',
     'skills/deepspider/SKILL.md',
@@ -53,6 +68,7 @@ try {
     'src/store/Store.js',
     'src/browser/EnvBridge.js',
     'src/env',
+    'src/rebuild',
   ]) {
     assert.equal(
       fs.existsSync(path.join(installedPackageRoot, removedPath)),
@@ -60,6 +76,21 @@ try {
       `removed path was published: ${removedPath}`,
     )
   }
+  const installedManifest = JSON.parse(
+    fs.readFileSync(path.join(installedPackageRoot, 'package.json'), 'utf8'),
+  )
+  const installedSource = readSourceTree(path.join(installedPackageRoot, 'src'))
+  assert.equal(Object.hasOwn(installedManifest.dependencies, 'jsdom'), false, 'direct jsdom dependency was published')
+  assert.doesNotMatch(
+    installedSource,
+    /export_rebuild_bundle|analyze_runtime_trace|analyze_script_semantics/,
+    'legacy rebuild tool was published',
+  )
+  assert.doesNotMatch(
+    installedSource,
+    /(?:from\s+['"]jsdom['"]|require\(\s*['"]jsdom['"]\s*\))/,
+    'direct jsdom entry was published',
+  )
   const cliPath = path.join(installedPackageRoot, 'bin', 'cli.js')
   const installedEnvExample = fs.readFileSync(path.join(installedPackageRoot, '.env.example'), 'utf8')
   assert.doesNotMatch(installedEnvExample, /DEEPSPIDER_USER_DATA_DIR|browser-profile/i)

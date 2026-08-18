@@ -25,14 +25,29 @@ test('bilingual READMEs describe the current evidence-driven runtime', () => {
     ]) assert.match(text, pattern)
 
     assert.doesNotMatch(text, /OpenCode|Camoufox|evolve_skill|web_fetch|PatchGenerator|EnvBridge|src\/env\/|\b51 tools\b|51 个工具/i)
+    assert.match(text, /evidence\/[\s\S]*sites\/[\s\S]*artifacts\//)
+    assert.doesNotMatch(text, /data\/\s+# SessionArtifactStore/i)
   }
 })
 
 test('repository guidance describes the same live architecture', () => {
-  assert.match(contributorGuide, /DSH/)
-  assert.match(contributorGuide, /Environment Recipe/)
-  assert.match(contributorGuide, /Dialog/)
-  assert.doesNotMatch(contributorGuide, /OpenCode|EnvBridge|PatchGenerator|src\/env\//)
+  for (const pattern of [
+    /DSH/,
+    /SessionArtifactStore/,
+    /Browser evidence/i,
+    /Output Contract/,
+    /Runtime Recipe/,
+    /RecoveryCoordinator/,
+    /sdenv Worker/,
+    /real request validation/i,
+    /Solver/,
+    /Dialog/,
+  ]) assert.match(contributorGuide, pattern)
+
+  assert.doesNotMatch(
+    contributorGuide,
+    /OpenCode|EnvBridge|PatchGenerator|src\/env\/|src\/store\/DataStore\.js|src\/rebuild|target\.original|stock jsdom|\bProbe\b|\bVerify\b/i,
+  )
 })
 
 test('package metadata identifies the current product and runtime floor', () => {

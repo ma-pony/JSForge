@@ -10,6 +10,10 @@ const pnpmWorkspace = fs.readFileSync(
   new URL('../pnpm-workspace.yaml', import.meta.url),
   'utf8'
 )
+const packedCliSmoke = fs.readFileSync(
+  new URL('../scripts/smoke-packed-cli.mjs', import.meta.url),
+  'utf8'
+)
 const dshPackageJsonPath = createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')
 const yaml = createRequire(dshPackageJsonPath)('js-yaml')
 
@@ -99,7 +103,23 @@ test('published package allowlist excludes the native DSH acceptance fixture', (
   assert.equal(included, false)
 })
 
-test('publish job provisions Patchright after the frozen release gates and before integration', () => {
+test('packed CLI smoke requires the Recovery runtime and rejects the legacy rebuild surface', () => {
+  for (const requiredPath of [
+    'src/recovery/coordinator.js',
+    'src/recovery/runtime/sdenv-adapter.js',
+    'src/recovery/runtime/worker.mjs',
+    'src/recovery/solver.js',
+  ]) {
+    assert.match(packedCliSmoke, new RegExp(requiredPath.replaceAll('/', '\\/').replace('.', '\\.')))
+  }
+
+  assert.doesNotMatch(packedCliSmoke, /src\/rebuild\/environment\/(?:compiler|chrome-baseline)\.js/)
+  assert.match(packedCliSmoke, /['"]src\/rebuild['"]/)
+  assert.match(packedCliSmoke, /export_rebuild_bundle\|analyze_runtime_trace\|analyze_script_semantics/)
+  assert.match(packedCliSmoke, /dependencies.*jsdom/s)
+})
+
+test('publish job rebuilds sdenv after the frozen install and provisions Patchright before integration', () => {
   const workflow = loadWorkflow('publish.yml')
   const testRuns = workflow.jobs.test.steps
     .map((step) => step.run)
@@ -109,6 +129,7 @@ test('publish job provisions Patchright after the frozen release gates and befor
     testRuns,
     [
       'pnpm install --frozen-lockfile --ignore-scripts',
+      'pnpm rebuild sdenv',
       'pnpm test',
       'pnpm lint',
       'pnpm audit --prod --audit-level high',

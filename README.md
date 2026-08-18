@@ -133,15 +133,12 @@ DeepSpider 从同一中央 Catalog 向 DSH 与 MCP 暴露工具，数量由代�
 
 ```text
 ~/.deepspider/sessions/<sha256(agent.id)>/
-├── metadata/
-├── data/                 # SessionArtifactStore 请求、响应与脚本索引
-├── evidence/
-├── contracts/
-├── recipes/
-├── runs/
-├── validations/
-├── solvers/
-├── screenshots/
+├── evidence/             # SessionArtifactStore 根目录
+│   ├── sites/            # 请求、响应、脚本与站点索引
+│   └── artifacts/        # Artifact Graph、Contract、Recipe、运行与验证产物
+├── runs/                 # sdenv Worker 运行目录
+├── solvers/              # 可独立运行的 Solver
+├── screenshots/          # Session 截图
 └── browser-data/
 ```
 

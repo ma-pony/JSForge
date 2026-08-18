@@ -133,15 +133,12 @@ Each Agent Session owns this root:
 
 ```text
 ~/.deepspider/sessions/<sha256(agent.id)>/
-├── metadata/
-├── data/                 # SessionArtifactStore request, response, and script indexes
-├── evidence/
-├── contracts/
-├── recipes/
-├── runs/
-├── validations/
-├── solvers/
-├── screenshots/
+├── evidence/             # SessionArtifactStore root
+│   ├── sites/            # Requests, responses, scripts, and site indexes
+│   └── artifacts/        # Artifact Graph, Contract, Recipe, run, and validation artifacts
+├── runs/                 # sdenv Worker run directories
+├── solvers/              # Standalone Solvers
+├── screenshots/          # Session screenshots
 └── browser-data/
 ```
 
