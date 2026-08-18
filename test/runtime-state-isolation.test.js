@@ -86,7 +86,7 @@ function createRuntime(sessionId) {
   })
 }
 
-test('default Runtimes own isolated DataStores and give them to their BrowserClients', (t) => {
+test('default Runtimes own isolated SessionArtifactStores and give them to their BrowserClients', (t) => {
   const sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-runtime-state-'))
   t.after(() => fs.rmSync(sessionRoot, { recursive: true, force: true }))
 
@@ -100,8 +100,8 @@ test('default Runtimes own isolated DataStores and give them to their BrowserCli
   })
 
   assert.notEqual(runtimeA.dataStore, runtimeB.dataStore)
-  assert.equal(runtimeA.dataStore.root, runtimeA.paths.data)
-  assert.equal(runtimeB.dataStore.root, runtimeB.paths.data)
+  assert.equal(runtimeA.dataStore.root, runtimeA.paths.evidence)
+  assert.equal(runtimeB.dataStore.root, runtimeB.paths.evidence)
 
   const browserA = runtimeA.browserFactory({ dataStore: runtimeA.dataStore })
   const browserB = runtimeB.browserFactory({ dataStore: runtimeB.dataStore })

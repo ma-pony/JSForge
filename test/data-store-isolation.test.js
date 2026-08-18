@@ -4,16 +4,17 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { DataStore } from '../src/store/DataStore.js'
+import { SessionArtifactStore } from '../src/store/SessionArtifactStore.js'
+import { buildArtifactGraph } from '../src/recovery/artifact-graph.js'
 
-test('DataStore keeps matching captures, indexes, searches, cleanup, and sessions inside its root', async (t) => {
+test('SessionArtifactStore keeps matching captures, indexes, searches, cleanup, and sessions inside its root', async (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-data-store-'))
   const rootA = path.join(temporary, 'session-a', 'data')
   const rootB = path.join(temporary, 'session-b', 'data')
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
 
-  const storeA = new DataStore({ root: rootA })
-  const storeB = new DataStore({ root: rootB })
+  const storeA = new SessionArtifactStore({ root: rootA })
+  const storeB = new SessionArtifactStore({ root: rootB })
 
   assert.equal(storeA.root, rootA)
   assert.equal(storeB.root, rootB)
@@ -119,14 +120,14 @@ test('DataStore keeps matching captures, indexes, searches, cleanup, and session
   assert.equal(fs.existsSync(indexB.responses[0].file), true)
 })
 
-test('DataStore requires a non-empty absolute root', () => {
-  assert.throws(() => new DataStore({ root: '' }), /non-empty absolute path/)
-  assert.throws(() => new DataStore({ root: 'relative/data' }), /non-empty absolute path/)
+test('SessionArtifactStore requires a non-empty absolute root', () => {
+  assert.throws(() => new SessionArtifactStore({ root: '' }), /non-empty absolute path/)
+  assert.throws(() => new SessionArtifactStore({ root: 'relative/data' }), /non-empty absolute path/)
 })
 
-test('DataStore scans complete response and script files after a prefix-index miss', async (t) => {
+test('SessionArtifactStore scans complete response and script files after a prefix-index miss', async (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-data-store-search-'))
-  const store = new DataStore({ root: path.join(temporary, 'data') })
+  const store = new SessionArtifactStore({ root: path.join(temporary, 'data') })
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
 
   store.startSession()
@@ -158,7 +159,7 @@ test('DataStore scans complete response and script files after a prefix-index mi
 
 test('replay lookup matches the exact request only inside the current Session', async (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-data-store-replay-'))
-  const store = new DataStore({ root: path.join(temporary, 'data') })
+  const store = new SessionArtifactStore({ root: path.join(temporary, 'data') })
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
 
   store.startSession()
@@ -208,4 +209,67 @@ test('replay lookup matches the exact request only inside the current Session', 
   assert.equal(current.status, 202)
   assert.equal(current.body, 'new-session-response')
   assert.deepEqual(current.headers, { 'x-session': 'new' })
+})
+
+test('SessionArtifactStore stores immutable artifact metadata and rejects unsourced derivatives', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-artifact-store-'))
+  const store = new SessionArtifactStore({ root: path.join(temporary, 'evidence') })
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+
+  const capture = await store.saveArtifact({
+    kind: 'document', origin: 'capture', url: 'https://example.test/', content: '<html/>', metadata: { title: 'Example' },
+  })
+  const derived = await store.saveArtifact({
+    kind: 'output-contract', origin: 'derived', sourceId: capture.id, content: '{"kind":"cookie"}', metadata: {},
+  })
+
+  assert.equal(capture.sha256.length, 64)
+  assert.deepEqual(await store.getArtifact(derived.id), {
+    ...derived,
+    content: '{"kind":"cookie"}',
+  })
+  assert.deepEqual((await store.listArtifacts({ kind: 'document', origin: 'capture' })).map(({ id }) => id), [capture.id])
+  await assert.rejects(
+    store.saveArtifact({ kind: 'runtime-recipe', origin: 'derived', content: '{}', metadata: {} }),
+    /sourceId/,
+  )
+})
+
+test('artifact graph links Session-derived runtime artifacts without source content', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-artifact-graph-'))
+  const store = new SessionArtifactStore({ root: path.join(temporary, 'evidence') })
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+
+  const contract = await store.saveArtifact({ kind: 'output-contract', origin: 'capture', content: '{}', metadata: {} })
+  const recipe = await store.saveArtifact({ kind: 'runtime-recipe', origin: 'derived', sourceId: contract.id, content: '{}', metadata: {} })
+  const run = await store.saveArtifact({ kind: 'runtime-run', origin: 'derived', sourceId: contract.id, content: '{}', metadata: {} })
+  const output = await store.saveArtifact({ kind: 'generated-output', origin: 'derived', sourceId: run.id, content: '{}', metadata: {} })
+  const validation = await store.saveArtifact({ kind: 'validation', origin: 'derived', sourceId: output.id, content: '{}', metadata: {} })
+  const solver = await store.saveArtifact({ kind: 'solver', origin: 'derived', sourceId: validation.id, content: '{}', metadata: {} })
+
+  const graph = await buildArtifactGraph({ store })
+  assert.deepEqual(new Set(graph.nodes.map(({ kind }) => kind)), new Set([
+    'output-contract', 'runtime-recipe', 'runtime-run', 'generated-output', 'validation', 'solver',
+  ]))
+  assert.deepEqual(new Set(graph.edges.map(({ relation }) => relation)), new Set(['derived-from']))
+  assert.equal(graph.nodes.find(({ id }) => id === solver.id).content, undefined)
+  assert.equal(recipe.sha256.length, 64)
+})
+
+test('capture deduplication does not overwrite the first response evidence', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-immutable-capture-'))
+  const store = new SessionArtifactStore({ root: path.join(temporary, 'evidence') })
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+
+  store.startSession()
+  const first = await store.saveResponse({
+    url: 'https://example.test/api', method: 'GET', status: 200,
+    requestHeaders: { 'x-evidence': 'first' }, responseBody: 'same body', pageUrl: 'https://example.test/',
+  })
+  await store.saveResponse({
+    url: 'https://example.test/api', method: 'GET', status: 200,
+    requestHeaders: { 'x-evidence': 'later' }, responseBody: 'same body', pageUrl: 'https://example.test/',
+  })
+
+  assert.deepEqual((await store.getResponse('example.test', first.id)).requestHeaders, { 'x-evidence': 'first' })
 })

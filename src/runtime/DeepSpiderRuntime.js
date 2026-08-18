@@ -1,5 +1,5 @@
 import { BrowserClient } from '../browser/client.js'
-import { DataStore } from '../store/DataStore.js'
+import { SessionArtifactStore } from '../store/SessionArtifactStore.js'
 
 function abortError(reason) {
   if (reason instanceof Error) return reason
@@ -50,7 +50,7 @@ export class DeepSpiderRuntime {
     sessionId,
     paths,
     browserFactory = ({ dataStore }) => new BrowserClient({ dataStore }),
-    dataStoreFactory = ({ paths }) => new DataStore({ root: paths.data }),
+    dataStoreFactory = ({ paths }) => new SessionArtifactStore({ root: paths.evidence }),
     env = process.env,
     onDialogMessage = null,
   }) {

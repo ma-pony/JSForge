@@ -3,6 +3,28 @@
  * 通过 CDP 捕获 JS 脚本源码，按站点存储到文件系统
  */
 
+import { createHash } from 'node:crypto';
+
+function sha256(source) {
+  return createHash('sha256').update(source || '').digest('hex');
+}
+
+function parentFrame(params) {
+  return params.stackTrace?.callFrames?.find((frame) => frame.scriptId !== params.scriptId) || null;
+}
+
+function sameDocument(url, pageUrl) {
+  try {
+    const left = new URL(url);
+    const right = new URL(pageUrl);
+    left.hash = '';
+    right.hash = '';
+    return left.href === right.href;
+  } catch {
+    return false;
+  }
+}
+
 export class ScriptInterceptor {
   constructor(cdpClient, page, dataStore) {
     if (!dataStore) {
@@ -40,7 +62,7 @@ export class ScriptInterceptor {
   }
 
   async onScriptParsed(params) {
-    const { scriptId, url, length: _length } = params;
+    const { scriptId, url } = params;
 
     // 跳过扩展脚本
     if (url?.startsWith('chrome-extension://')) return;
@@ -48,30 +70,11 @@ export class ScriptInterceptor {
 
     this.scriptIds.add(scriptId);
 
-    if (url) {
-      // 有 URL 的脚本：获取源码、通知订阅者、存储
-      this.fetchAndSave(scriptId, url).catch(() => {});
-    } else if (this.onSource) {
-      // 无 URL 脚本（eval/new Function 生成）：仅通知订阅者用于 debugger 检测，不存储
-      this.fetchAndNotify(scriptId).catch(() => {});
-    }
+    this.fetchAndSave(params).catch(() => {});
   }
 
-  async fetchAndNotify(scriptId) {
-    try {
-      // 添加超时保护防止 CDP 命令挂起
-      const sourcePromise = this.client.send('Debugger.getScriptSource', { scriptId });
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('getScriptSource timeout')), 5000)
-      );
-      const { scriptSource } = await Promise.race([sourcePromise, timeoutPromise]);
-      try { this.onSource(scriptId, scriptSource); } catch { /* 订阅者异常不影响主流程 */ }
-    } catch {
-      // 获取失败（脚本已卸载等），忽略
-    }
-  }
-
-  async fetchAndSave(scriptId, url) {
+  async fetchAndSave(params) {
+    const { scriptId, url } = params;
     try {
       // 添加超时保护防止 CDP 命令挂起
       const sourcePromise = this.client.send('Debugger.getScriptSource', { scriptId });
@@ -83,18 +86,33 @@ export class ScriptInterceptor {
       // 通知订阅者（AntiDebugInterceptor 等）
       try { this.onSource?.(scriptId, scriptSource); } catch { /* 订阅者异常不影响主流程 */ }
 
+      const parent = parentFrame(params);
+      // Ignore short anonymous utility-world snippets without a page-owned parent.
+      if (!url && scriptSource.length < 1024 && !/^https?:/i.test(parent?.url || '')) return;
+
       // 限制大小，超大脚本只保存部分
       const SIZE_LIMIT = 2000000;
       const truncated = scriptSource.length > SIZE_LIMIT;
       const source = truncated ? scriptSource.slice(0, SIZE_LIMIT) : scriptSource;
+      const sourceHash = sha256(source);
+      const pageUrl = this.getPageUrl();
+      const scriptUrl = url || `dynamic://sha256/${sourceHash}.js`;
+      const type = !url ? 'dynamic' : (sameDocument(url, pageUrl) ? 'inline' : 'external');
 
       await this.store.saveScript({
-        url,
-        type: 'external',
+        url: scriptUrl,
+        type,
         source,
         truncated,
+        sourceHash,
+        cdpScriptId: scriptId,
+        executionContextId: params.executionContextId,
+        parentScriptId: parent?.scriptId || null,
+        parentUrl: parent?.url || null,
+        startLine: params.startLine,
+        startColumn: params.startColumn,
         timestamp: Date.now(),
-        pageUrl: this.getPageUrl()  // 传递页面 URL
+        pageUrl,
       });
     } catch {
       // 获取失败，跳过

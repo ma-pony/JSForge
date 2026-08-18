@@ -14,6 +14,20 @@ function storageSnapshot() {
     session: read(sessionStorage),
   }
 }
+
+function probeSnapshot() {
+  const api = globalThis.__deepspider__
+  if (!api?.getLogs) return null
+  const read = (type) => {
+    try { return JSON.parse(api.getLogs(type)) } catch { return [] }
+  }
+  return {
+    cookie: read('cookie'),
+    storage: read('storage'),
+    fetch: read('fetch'),
+    xhr: read('xhr'),
+  }
+}
 export class SessionEvidenceCollector {
   constructor(page) {
     if (!page) throw new TypeError('page must be provided')
@@ -21,11 +35,12 @@ export class SessionEvidenceCollector {
   }
 
   async collect() {
-    const [title, html, storage, cookies] = await Promise.all([
+    const [title, html, storage, cookies, probe] = await Promise.all([
       this.page.title(),
       this.page.content(),
       this.page.evaluate(storageSnapshot),
       this.page.context().cookies(),
+      this.page.evaluate(probeSnapshot).catch(() => null),
     ])
 
     return {
@@ -41,6 +56,7 @@ export class SessionEvidenceCollector {
         local: storage.local,
         session: storage.session,
       },
+      probe,
       document: { html },
     }
   }

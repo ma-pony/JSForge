@@ -11,11 +11,13 @@ function fakePage() {
     context: () => ({
       cookies: async () => [{ name: 'sid', value: 'secret', domain: 'example.com' }],
     }),
-    evaluate: async () => ({
-      referrer: 'https://referrer.test/',
-      local: { token: 'abc' },
-      session: { nonce: 'xyz' },
-    }),
+    evaluate: async (script) => script.name === 'probeSnapshot'
+      ? { cookie: [{ action: 'write' }], storage: [], fetch: [], xhr: [] }
+      : {
+          referrer: 'https://referrer.test/',
+          local: { token: 'abc' },
+          session: { nonce: 'xyz' },
+        },
   }
 }
 
@@ -37,5 +39,6 @@ test('Session evidence contains page state without treating its navigator as bas
   assert.deepEqual(evidence.document, {
     html: '<!doctype html><title>Example</title>',
   })
+  assert.deepEqual(evidence.probe, { cookie: [{ action: 'write' }], storage: [], fetch: [], xhr: [] })
   assert.equal('navigator' in evidence, false)
 })

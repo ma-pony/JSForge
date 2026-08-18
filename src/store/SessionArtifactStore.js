@@ -28,9 +28,10 @@ function contentHash(content) {
 /**
  * 生成请求唯一标识
  */
-function requestHash(url, method, body) {
+function responseHash(url, method, body, status, responseBody) {
   const exactBody = body == null ? '<null>' : String(body);
-  return contentHash(`${normalizeUrl(url)}|${String(method || 'GET').toUpperCase()}|${exactBody}`);
+  const exactResponse = responseBody == null ? '<null>' : String(responseBody);
+  return contentHash(`${normalizeUrl(url)}|${String(method || 'GET').toUpperCase()}|${exactBody}|${status}|${exactResponse}`);
 }
 
 function normalizeUrl(url) {
@@ -145,7 +146,7 @@ function getSiteSearchIndex(searchIndex, site) {
   return searchIndex.get(site);
 }
 
-export class DataStore {
+export class SessionArtifactStore {
   constructor({ root } = {}) {
     if (typeof root !== 'string' || root.length === 0 || !isAbsolute(root)) {
       throw new TypeError('root must be a non-empty absolute path');
@@ -154,6 +155,9 @@ export class DataStore {
     this.root = root;
     this.sitesDir = join(root, 'sites');
     this.globalIndexPath = join(root, 'index.json');
+    this.artifactsDir = join(root, 'artifacts');
+    this.artifactIndexPath = join(this.artifactsDir, 'index.json');
+    this.artifactIndex = [];
     // 全局索引：站点列表
     this.globalIndex = {
       sites: [],  // { hostname, lastAccess, responseCount, scriptCount }
@@ -173,7 +177,9 @@ export class DataStore {
 
     ensureSecureDir(this.root);
     ensureSecureDir(this.sitesDir);
+    ensureSecureDir(this.artifactsDir);
     this.loadGlobalIndex();
+    this.loadArtifactIndex();
   }
 
   /**
@@ -235,7 +241,7 @@ export class DataStore {
    */
   startSession() {
     this.sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    console.error(`[DataStore] 新会话: ${this.sessionId}`);
+    console.error(`[SessionArtifactStore] 新会话: ${this.sessionId}`);
     return this.sessionId;
   }
 
@@ -259,13 +265,75 @@ export class DataStore {
         };
       }
     } catch (e) {
-      console.error('[DataStore] 加载全局索引失败:', e.message);
+      console.error('[SessionArtifactStore] 加载全局索引失败:', e.message);
       this.globalIndex = { sites: [] };
     }
   }
 
   async saveGlobalIndex() {
     await writeFile(this.globalIndexPath, JSON.stringify(this.globalIndex, null, 2), { mode: 0o600 });
+  }
+
+  loadArtifactIndex() {
+    try {
+      if (existsSync(this.artifactIndexPath)) {
+        const data = JSON.parse(readFileSync(this.artifactIndexPath, 'utf-8'));
+        this.artifactIndex = Array.isArray(data.artifacts) ? data.artifacts : [];
+      }
+    } catch {
+      this.artifactIndex = [];
+    }
+  }
+
+  async saveArtifactIndex() {
+    await writeFile(this.artifactIndexPath, JSON.stringify({ artifacts: this.artifactIndex }, null, 2), { mode: 0o600 });
+  }
+
+  async saveArtifact({ kind, origin, sourceId = null, url = null, content = '', metadata = {} }) {
+    if (typeof kind !== 'string' || kind.length === 0) throw new TypeError('Artifact kind must be a non-empty string');
+    if (typeof origin !== 'string' || origin.length === 0) throw new TypeError('Artifact origin must be a non-empty string');
+    if (origin === 'derived' && (typeof sourceId !== 'string' || sourceId.length === 0)) {
+      throw new TypeError('Derived Artifact sourceId must be provided');
+    }
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      throw new TypeError('Artifact metadata must be an object');
+    }
+
+    const text = typeof content === 'string' ? content : JSON.stringify(content);
+    const sha256 = createHash('sha256').update(text).digest('hex');
+    const id = `artifact-${createHash('sha256').update(`${kind}\u0000${origin}\u0000${sourceId || ''}\u0000${sha256}`).digest('hex')}`;
+    const existing = this.artifactIndex.find((artifact) => artifact.id === id);
+    if (existing) {
+      const { file: _file, ...artifact } = existing;
+      return artifact;
+    }
+
+    const entry = {
+      id, kind, origin, sourceId, url: url == null ? null : normalizeUrl(url), sha256,
+      metadata: { ...metadata }, timestamp: Date.now(), file: join(this.artifactsDir, `${id}.json`),
+    };
+    await writeFile(entry.file, JSON.stringify({ ...entry, content: text }, null, 2), { mode: 0o600 });
+    this.artifactIndex.push(entry);
+    await this.saveArtifactIndex();
+    const { file: _file, ...artifact } = entry;
+    return artifact;
+  }
+
+  async getArtifact(id) {
+    const artifact = this.artifactIndex.find((entry) => entry.id === id);
+    if (!artifact) return null;
+    try {
+      const { file: _file, ...stored } = JSON.parse(await readFile(artifact.file, 'utf-8'));
+      return stored;
+    } catch {
+      return null;
+    }
+  }
+
+  async listArtifacts({ kind = null, origin = null } = {}) {
+    return this.artifactIndex
+      .filter((artifact) => (!kind || artifact.kind === kind) && (!origin || artifact.origin === origin))
+      .map(({ file: _file, ...artifact }) => ({ ...artifact }));
   }
 
   /**
@@ -357,7 +425,8 @@ export class DataStore {
   async saveResponse(data) {
     const {
       url, method, status, requestHeaders, requestBody,
-      responseHeaders, responseBody, timestamp, pageUrl, initiator,
+      responseHeaders, responseBody, timestamp, pageUrl, initiator, resourceType, metadataOnly,
+      associatedCookies,
     } = data;
     const { site, path } = parseUrl(pageUrl || url);
 
@@ -367,7 +436,7 @@ export class DataStore {
 
     try {
       // 生成去重 hash
-      const hash = requestHash(url, method, requestBody);
+      const hash = responseHash(url, method, requestBody, status, responseBody);
 
       // 重新加载索引（获取最新状态）
       this.siteIndexCache.delete(site);
@@ -376,17 +445,10 @@ export class DataStore {
       // 检查是否已存在相同内容
       const existing = index.responses.find(r => r.hash === hash);
       if (existing) {
-        // 同一请求在新 Session 中出现时，用本次真实响应刷新重放证据。
-        const content = JSON.stringify({
-          url, method, status,
-          requestHeaders, requestBody, responseHeaders, responseBody,
-          pageUrl, timestamp, initiator,
-        });
-        await writeFile(existing.file, content, { mode: 0o600 });
+        // Captured source is immutable; a repeated request only joins this Session.
         existing.timestamp = timestamp || Date.now();
         existing.sessionId = this.getSessionId();
         existing.status = status;
-        existing.size = content.length;
         existing.hasInitiator = !!initiator;
         await this.saveSiteIndex(site);
         result = { id: existing.id, site, path, deduplicated: true };
@@ -404,13 +466,14 @@ export class DataStore {
         const content = JSON.stringify({
           url, method, status,
           requestHeaders, requestBody, responseHeaders, responseBody,
-          pageUrl, timestamp, initiator,
+          pageUrl, timestamp, initiator, resourceType, metadataOnly, associatedCookies,
         });
 
         await writeFile(file, content, { mode: 0o600 });
 
         index.responses.push({
           id, url, path, method, status,
+          resourceType, metadataOnly,
           timestamp: timestamp || Date.now(),
           file, size: content.length,
           hash, hasInitiator: !!initiator,
@@ -441,7 +504,11 @@ export class DataStore {
    * 保存脚本源码（带去重，带锁防止竞态条件）
    */
   async saveScript(data) {
-    const { url, type, source, truncated, timestamp, pageUrl } = data;
+    const {
+      url, type, source, truncated, timestamp, pageUrl,
+      sourceHash, cdpScriptId, executionContextId, parentScriptId,
+      parentUrl, startLine, startColumn,
+    } = data;
     const { site } = parseUrl(pageUrl || url);
 
     // 获取站点锁，防止并发写入
@@ -461,6 +528,10 @@ export class DataStore {
       if (existing) {
         existing.timestamp = timestamp || Date.now();
         existing.sessionId = this.getSessionId();
+        Object.assign(existing, {
+          pageUrl, sourceHash, cdpScriptId, executionContextId,
+          parentScriptId, parentUrl, startLine, startColumn,
+        });
         await this.saveSiteIndex(site);
         result = { id: existing.id, site, deduplicated: true };
       } else {
@@ -480,6 +551,14 @@ export class DataStore {
           timestamp: timestamp || Date.now(),
           file, size: source?.length || 0,
           hash,
+          pageUrl,
+          sourceHash,
+          cdpScriptId,
+          executionContextId,
+          parentScriptId,
+          parentUrl,
+          startLine,
+          startColumn,
           sessionId: this.getSessionId()
         };
         if (truncated) entry.truncated = true;
@@ -533,6 +612,7 @@ export class DataStore {
       return responses.map(r => ({
         id: r.id, url: r.url, path: r.path,
         method: r.method, status: r.status,
+        resourceType: r.resourceType,
         timestamp: r.timestamp, size: r.size,
         hasInitiator: !!r.hasInitiator,
         sessionId: r.sessionId
@@ -570,7 +650,15 @@ export class DataStore {
         id: s.id, url: s.url, type: s.type,
         timestamp: s.timestamp, size: s.size,
         truncated: s.truncated || false,
-        sessionId: s.sessionId
+        sessionId: s.sessionId,
+        pageUrl: s.pageUrl,
+        sourceHash: s.sourceHash,
+        cdpScriptId: s.cdpScriptId,
+        executionContextId: s.executionContextId,
+        parentScriptId: s.parentScriptId,
+        parentUrl: s.parentUrl,
+        startLine: s.startLine,
+        startColumn: s.startColumn,
       }));
     }
 
@@ -763,7 +851,7 @@ export class DataStore {
     }
     this.lastCleanup = now;
     this.cleanup().catch(e => {
-      console.error('[DataStore] 清理失败:', e.message);
+      console.error('[SessionArtifactStore] 清理失败:', e.message);
     });
   }
 
@@ -771,7 +859,7 @@ export class DataStore {
    * 执行清理
    */
   async cleanup() {
-    console.error('[DataStore] 开始清理过期数据...');
+    console.error('[SessionArtifactStore] 开始清理过期数据...');
     const now = Date.now();
     let totalCleaned = 0;
 
@@ -785,7 +873,7 @@ export class DataStore {
     totalCleaned += await this.cleanupTotalSize();
 
     if (totalCleaned > 0) {
-      console.error(`[DataStore] 清理完成，删除 ${totalCleaned} 条记录`);
+      console.error(`[SessionArtifactStore] 清理完成，删除 ${totalCleaned} 条记录`);
     }
   }
 
@@ -918,11 +1006,11 @@ export class DataStore {
       await this.clearSite(oldest.hostname);
       totalSize -= oldest.size;
       cleaned++;
-      console.error(`[DataStore] 清理站点: ${oldest.hostname}`);
+      console.error(`[SessionArtifactStore] 清理站点: ${oldest.hostname}`);
     }
 
     return cleaned;
   }
 }
 
-export default DataStore;
+export default SessionArtifactStore;

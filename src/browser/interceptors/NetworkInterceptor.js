@@ -12,6 +12,8 @@ export class NetworkInterceptor {
     this.page = page;  // Playwright page 对象
     this.store = dataStore;
     this.pendingRequests = new Map();
+    this.pendingRequestExtras = new Map();
+    this.pendingResponseExtras = new Map();
     this.wsConnections = new Map();  // requestId -> ws url
   }
 
@@ -37,10 +39,20 @@ export class NetworkInterceptor {
     this.client.on('Network.requestWillBeSent', (params) => {
       this.onRequest(params);
     });
+    this.client.on('Network.requestWillBeSentExtraInfo', (params) => {
+      const pending = this.pendingRequests.get(params.requestId);
+      if (pending) this.applyRequestExtra(pending, params);
+      else this.pendingRequestExtras.set(params.requestId, params);
+    });
 
     // 监听响应
     this.client.on('Network.responseReceived', (params) => {
       this.onResponse(params);
+    });
+    this.client.on('Network.responseReceivedExtraInfo', (params) => {
+      const pending = this.pendingRequests.get(params.requestId);
+      if (pending) this.applyResponseExtra(pending, params);
+      else this.pendingResponseExtras.set(params.requestId, params);
     });
 
     // 监听加载完成
@@ -51,6 +63,8 @@ export class NetworkInterceptor {
     // 监听加载失败（清理 pendingRequests，防止内存泄漏）
     this.client.on('Network.loadingFailed', (params) => {
       this.pendingRequests.delete(params.requestId);
+      this.pendingRequestExtras.delete(params.requestId);
+      this.pendingResponseExtras.delete(params.requestId);
     });
 
     // WebSocket 连接跟踪
@@ -82,21 +96,47 @@ export class NetworkInterceptor {
   }
 
   onRequest(params) {
-    const { requestId, request, timestamp, initiator } = params;
+    const { requestId, request, wallTime, initiator } = params;
 
-    // 只记录 XHR/Fetch 请求
+    // Document/Script are required to reconstruct protected multi-stage loaders.
+    // Images, styles and fonts are not useful to the JavaScript evidence graph.
     const type = params.type;
-    if (type !== 'XHR' && type !== 'Fetch') return;
+    if (!['Document', 'Script', 'XHR', 'Fetch'].includes(type)) return;
 
-    this.pendingRequests.set(requestId, {
+    const pending = {
       url: request.url,
       method: request.method,
+      resourceType: type,
       headers: request.headers,
       postData: request.postData,
-      timestamp: timestamp * 1000,
+      timestamp: wallTime ? wallTime * 1000 : Date.now(),
       pageUrl: this.getPageUrl(),
       initiator: this.formatInitiator(initiator),
-    });
+    };
+    this.pendingRequests.set(requestId, pending);
+    const requestExtra = this.pendingRequestExtras.get(requestId);
+    if (requestExtra) {
+      this.applyRequestExtra(pending, requestExtra);
+      this.pendingRequestExtras.delete(requestId);
+    }
+    const responseExtra = this.pendingResponseExtras.get(requestId);
+    if (responseExtra) {
+      this.applyResponseExtra(pending, responseExtra);
+      this.pendingResponseExtras.delete(requestId);
+    }
+  }
+
+  applyRequestExtra(pending, params) {
+    pending.headers = { ...pending.headers, ...params.headers };
+    pending.associatedCookies = (params.associatedCookies || []).map((entry) => ({
+      name: entry.cookie?.name,
+      value: entry.cookie?.value,
+      blockedReasons: entry.blockedReasons || [],
+    })).filter((entry) => entry.name);
+  }
+
+  applyResponseExtra(pending, params) {
+    pending.responseHeaders = { ...pending.responseHeaders, ...params.headers };
   }
 
   /**
@@ -131,7 +171,27 @@ export class NetworkInterceptor {
     if (!pending) return;
 
     pending.status = response.status;
-    pending.responseHeaders = response.headers;
+    pending.responseHeaders = { ...response.headers, ...pending.responseHeaders };
+
+    // A challenge document can navigate again before its body collection finishes.
+    // Persist the status immediately so the first stage cannot disappear.
+    if (pending.resourceType === 'Document' && response.status >= 400) {
+      this.store.saveResponse({
+        url: pending.url,
+        method: pending.method,
+        resourceType: pending.resourceType,
+        status: pending.status,
+        requestHeaders: pending.headers,
+        associatedCookies: pending.associatedCookies,
+        requestBody: pending.postData,
+        responseHeaders: pending.responseHeaders,
+        responseBody: '',
+        timestamp: pending.timestamp,
+        pageUrl: pending.pageUrl,
+        initiator: pending.initiator,
+        metadataOnly: true,
+      }).catch(() => {});
+    }
   }
 
   async onLoadingFinished(params) {
@@ -170,8 +230,10 @@ export class NetworkInterceptor {
       this.store.saveResponse({
         url: pending.url,
         method: pending.method,
+        resourceType: pending.resourceType,
         status: pending.status,
         requestHeaders: pending.headers,
+        associatedCookies: pending.associatedCookies,
         requestBody: pending.postData,
         responseHeaders: pending.responseHeaders,
         responseBody,
@@ -187,6 +249,8 @@ export class NetworkInterceptor {
     }
 
     this.pendingRequests.delete(requestId);
+    this.pendingRequestExtras.delete(requestId);
+    this.pendingResponseExtras.delete(requestId);
   }
 
   /**

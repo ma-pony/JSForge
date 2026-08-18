@@ -202,7 +202,9 @@ export class BrowserClient extends EventEmitter {
 
     const source = getDefaultHookScript('probe');
     await this.context.addInitScript(source);
-    await this.page.evaluate(source);
+    if (/^https?:/i.test(this.page.url())) {
+      await this.page.evaluate(source);
+    }
     this.hookScript = source;
     this.probeActivated = true;
     this.mode = 'probe';

@@ -63,7 +63,7 @@ test('observe mode adds no init script or Runtime binding', async () => {
   await client.close()
 })
 
-test('Probe activation installs its script for future and current documents once', async () => {
+test('Probe activation installs its script for future documents without evaluating about:blank', async () => {
   const harness = createHarness()
   const client = new BrowserClient({
     dataStore: harness.store,
@@ -76,7 +76,7 @@ test('Probe activation installs its script for future and current documents once
 
   assert.equal(client.mode, 'probe')
   assert.equal(harness.context.addInitScriptCalls.length, 1)
-  assert.equal(harness.page.evaluateCalls.length, 1)
+  assert.equal(harness.page.evaluateCalls.length, 0)
   assert.match(harness.context.addInitScriptCalls[0], /__deepspider__/)
   await client.close()
 })
