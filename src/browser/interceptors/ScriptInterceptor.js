@@ -87,8 +87,6 @@ export class ScriptInterceptor {
       try { this.onSource?.(scriptId, scriptSource); } catch { /* 订阅者异常不影响主流程 */ }
 
       const parent = parentFrame(params);
-      // Ignore short anonymous utility-world snippets without a page-owned parent.
-      if (!url && scriptSource.length < 1024 && !/^https?:/i.test(parent?.url || '')) return;
 
       // 限制大小，超大脚本只保存部分
       const SIZE_LIMIT = 2000000;

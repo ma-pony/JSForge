@@ -5,7 +5,7 @@
  */
 
 import { existsSync, readFileSync } from 'fs';
-import { writeFile, readFile, rm } from 'fs/promises';
+import { writeFile, readFile, rename, rm } from 'fs/promises';
 import { isAbsolute, join, resolve, sep } from 'path';
 import { createHash } from 'crypto';
 import { ensureSecureDir } from '../config/paths.js';
@@ -28,10 +28,10 @@ function contentHash(content) {
 /**
  * 生成请求唯一标识
  */
-function responseHash(url, method, body, status, responseBody) {
+function responseHash(url, method, body, status, responseBody, sessionId, requestHeaders, associatedCookies) {
   const exactBody = body == null ? '<null>' : String(body);
   const exactResponse = responseBody == null ? '<null>' : String(responseBody);
-  return contentHash(`${normalizeUrl(url)}|${String(method || 'GET').toUpperCase()}|${exactBody}|${status}|${exactResponse}`);
+  return contentHash(`${normalizeUrl(url)}|${String(method || 'GET').toUpperCase()}|${exactBody}|${status}|${exactResponse}|${sessionId}|${JSON.stringify(requestHeaders || {})}|${JSON.stringify(associatedCookies || [])}`);
 }
 
 function normalizeUrl(url) {
@@ -158,6 +158,7 @@ export class SessionArtifactStore {
     this.artifactsDir = join(root, 'artifacts');
     this.artifactIndexPath = join(this.artifactsDir, 'index.json');
     this.artifactIndex = [];
+    this.artifactWrite = Promise.resolve();
     // 全局索引：站点列表
     this.globalIndex = {
       sites: [],  // { hostname, lastAccess, responseCount, scriptCount }
@@ -275,18 +276,33 @@ export class SessionArtifactStore {
   }
 
   loadArtifactIndex() {
-    try {
-      if (existsSync(this.artifactIndexPath)) {
+    if (existsSync(this.artifactIndexPath)) {
+      try {
         const data = JSON.parse(readFileSync(this.artifactIndexPath, 'utf-8'));
-        this.artifactIndex = Array.isArray(data.artifacts) ? data.artifacts : [];
+        if (!Array.isArray(data.artifacts)) throw new TypeError('artifacts must be an array');
+        this.artifactIndex = data.artifacts;
+      } catch (error) {
+        throw new Error(`Invalid Artifact index: ${error.message}`, { cause: error });
       }
-    } catch {
-      this.artifactIndex = [];
     }
   }
 
   async saveArtifactIndex() {
-    await writeFile(this.artifactIndexPath, JSON.stringify({ artifacts: this.artifactIndex }, null, 2), { mode: 0o600 });
+    const temporary = join(this.artifactsDir, `.index-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    await writeFile(temporary, JSON.stringify({ artifacts: this.artifactIndex }, null, 2), { mode: 0o600 });
+    await rename(temporary, this.artifactIndexPath);
+  }
+
+  async withArtifactWrite(operation) {
+    const previous = this.artifactWrite;
+    let release;
+    this.artifactWrite = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   async saveArtifact({ kind, origin, sourceId = null, url = null, content = '', metadata = {} }) {
@@ -302,21 +318,23 @@ export class SessionArtifactStore {
     const text = typeof content === 'string' ? content : JSON.stringify(content);
     const sha256 = createHash('sha256').update(text).digest('hex');
     const id = `artifact-${createHash('sha256').update(`${kind}\u0000${origin}\u0000${sourceId || ''}\u0000${sha256}`).digest('hex')}`;
-    const existing = this.artifactIndex.find((artifact) => artifact.id === id);
-    if (existing) {
-      const { file: _file, ...artifact } = existing;
-      return artifact;
-    }
+    return this.withArtifactWrite(async () => {
+      const existing = this.artifactIndex.find((artifact) => artifact.id === id);
+      if (existing) {
+        const { file: _file, ...artifact } = existing;
+        return artifact;
+      }
 
-    const entry = {
-      id, kind, origin, sourceId, url: url == null ? null : normalizeUrl(url), sha256,
-      metadata: { ...metadata }, timestamp: Date.now(), file: join(this.artifactsDir, `${id}.json`),
-    };
-    await writeFile(entry.file, JSON.stringify({ ...entry, content: text }, null, 2), { mode: 0o600 });
-    this.artifactIndex.push(entry);
-    await this.saveArtifactIndex();
-    const { file: _file, ...artifact } = entry;
-    return artifact;
+      const entry = {
+        id, kind, origin, sourceId, url: url == null ? null : normalizeUrl(url), sha256,
+        metadata: { ...metadata }, timestamp: Date.now(), file: join(this.artifactsDir, `${id}.json`),
+      };
+      await writeFile(entry.file, JSON.stringify({ ...entry, content: text }, null, 2), { mode: 0o600 });
+      this.artifactIndex.push(entry);
+      await this.saveArtifactIndex();
+      const { file: _file, ...artifact } = entry;
+      return artifact;
+    });
   }
 
   async getArtifact(id) {
@@ -429,6 +447,7 @@ export class SessionArtifactStore {
       associatedCookies,
     } = data;
     const { site, path } = parseUrl(pageUrl || url);
+    const sessionId = this.getSessionId();
 
     // 获取站点锁，防止并发写入
     const releaseLock = await this.acquireLock(site);
@@ -436,7 +455,7 @@ export class SessionArtifactStore {
 
     try {
       // 生成去重 hash
-      const hash = responseHash(url, method, requestBody, status, responseBody);
+      const hash = responseHash(url, method, requestBody, status, responseBody, sessionId, requestHeaders, associatedCookies);
 
       // 重新加载索引（获取最新状态）
       this.siteIndexCache.delete(site);
@@ -445,12 +464,7 @@ export class SessionArtifactStore {
       // 检查是否已存在相同内容
       const existing = index.responses.find(r => r.hash === hash);
       if (existing) {
-        // Captured source is immutable; a repeated request only joins this Session.
-        existing.timestamp = timestamp || Date.now();
-        existing.sessionId = this.getSessionId();
-        existing.status = status;
-        existing.hasInitiator = !!initiator;
-        await this.saveSiteIndex(site);
+        // Captured source and its Session provenance are immutable.
         result = { id: existing.id, site, path, deduplicated: true };
       } else {
         const siteDir = this.getSiteDir(site);
@@ -477,7 +491,7 @@ export class SessionArtifactStore {
           timestamp: timestamp || Date.now(),
           file, size: content.length,
           hash, hasInitiator: !!initiator,
-          sessionId: this.getSessionId()
+          sessionId
         });
 
         // 写入搜索索引：url + responseBody 前 1000 字符，小写

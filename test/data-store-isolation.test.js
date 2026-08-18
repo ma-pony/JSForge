@@ -235,6 +235,20 @@ test('SessionArtifactStore stores immutable artifact metadata and rejects unsour
   )
 })
 
+test('SessionArtifactStore serializes concurrent Artifact saves and reopens their complete index', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-artifact-concurrency-'))
+  const root = path.join(temporary, 'evidence')
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+
+  const store = new SessionArtifactStore({ root })
+  await Promise.all(Array.from({ length: 30 }, (_, index) => store.saveArtifact({
+    kind: 'document', origin: 'capture', content: `artifact-${index}`, metadata: { index },
+  })))
+
+  const reopened = new SessionArtifactStore({ root })
+  assert.equal((await reopened.listArtifacts()).length, 30)
+})
+
 test('artifact graph links Session-derived runtime artifacts without source content', async (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-artifact-graph-'))
   const store = new SessionArtifactStore({ root: path.join(temporary, 'evidence') })
@@ -256,7 +270,29 @@ test('artifact graph links Session-derived runtime artifacts without source cont
   assert.equal(recipe.sha256.length, 64)
 })
 
-test('capture deduplication does not overwrite the first response evidence', async (t) => {
+test('response identity preserves each Session Cookie evidence without overwriting the first capture', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-immutable-capture-'))
+  const store = new SessionArtifactStore({ root: path.join(temporary, 'evidence') })
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+
+  store.startSession()
+  const first = await store.saveResponse({
+    url: 'https://example.test/api', method: 'GET', status: 200,
+    requestHeaders: { 'x-evidence': 'first' }, associatedCookies: [{ name: 'sid', value: 'a' }],
+    responseBody: 'same body', pageUrl: 'https://example.test/',
+  })
+  store.startSession()
+  const second = await store.saveResponse({
+    url: 'https://example.test/api', method: 'GET', status: 200,
+    requestHeaders: { 'x-evidence': 'second' }, associatedCookies: [{ name: 'sid', value: 'b' }],
+    responseBody: 'same body', pageUrl: 'https://example.test/',
+  })
+
+  assert.deepEqual((await store.getResponse('example.test', second.id)).associatedCookies, [{ name: 'sid', value: 'b' }])
+  assert.deepEqual((await store.getResponse('example.test', first.id)).associatedCookies, [{ name: 'sid', value: 'a' }])
+})
+
+test('response deduplication keeps the first same-Session capture immutable', async (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-immutable-capture-'))
   const store = new SessionArtifactStore({ root: path.join(temporary, 'evidence') })
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
