@@ -30,6 +30,7 @@ function normalizeEntry(entry) {
     path,
     caller,
     reason: entry.reason == null ? null : String(entry.reason),
+    suggestion: entry.suggestion && typeof entry.suggestion === 'object' ? { ...entry.suggestion } : null,
     blocking: Boolean(blocking),
     count: 1,
   }

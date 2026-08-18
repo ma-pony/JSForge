@@ -2,7 +2,7 @@ import { join } from 'node:path'
 
 import { artifactManifest, buildArtifactGraph } from './artifact-graph.js'
 import { createOutputContract, hashContract, validateOutputContract } from './contracts.js'
-import { createRuntimeRecipe, validateRuntimeRecipe } from './recipe.js'
+import { createRuntimeRecipe, hashRecipe, validateRuntimeRecipe } from './recipe.js'
 import { exportSolver } from './solver.js'
 import { detectStrategy } from './strategy-detector.js'
 import { aggregateUnknowns } from './unknowns.js'
@@ -15,7 +15,7 @@ const TEMPLATE_BLOCKED_HEADERS = new Set([
 
 function throwIfAborted(signal) {
   if (!signal?.aborted) return
-  throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason || 'Recovery aborted'))
+  throw signal.reason
 }
 
 function normalizedUrl(value) {
@@ -93,7 +93,17 @@ async function loadRecipe(store, contractArtifactId) {
   return null
 }
 
-function algorithmResult() {
+function observedValidation(contract = null, outputArtifactIds = []) {
+  return {
+    level: 'observed', accepted: false, status: null,
+    expectedStatus: contract?.success?.status ?? null,
+    title: null, expectedTitle: contract?.success?.title ?? null,
+    outputArtifactIds,
+  }
+}
+
+function algorithmResult(context = {}) {
+  const { rawUnknowns = [], ...details } = context
   const blocker = {
     kind: 'program',
     operation: 'algorithm-recovery',
@@ -103,17 +113,16 @@ function algorithmResult() {
     blocking: true,
     count: 1,
   }
+  const diagnostics = aggregateUnknowns(rawUnknowns)
   return {
+    ...details,
     strategy: 'algorithm-recovery',
-    validation: {
-      level: 'observed', accepted: false, status: null, expectedStatus: null,
-      title: null, expectedTitle: null, outputArtifactIds: [],
-    },
-    unknowns: [blocker],
+    validation: details.validation || observedValidation(details.contract),
+    unknowns: [blocker, ...diagnostics],
     blocker,
     suggestedRecipeActions: [],
-    nextActions: [{ action: 'run-semantic-runtime', mode: 'auto' }],
-    attempts: [],
+    nextActions: [{ action: 'implement-algorithm-recovery-engine' }],
+    attempts: details.attempts || [],
     solver: null,
   }
 }
@@ -121,6 +130,16 @@ function algorithmResult() {
 function recipeActions(unknowns) {
   const actions = []
   for (const unknown of unknowns) {
+    if (unknown.suggestion?.action) {
+      const candidate = {
+        ...unknown.suggestion,
+        operation: unknown.operation,
+        path: unknown.path,
+      }
+      if (!actions.some((entry) => JSON.stringify(entry) === JSON.stringify(candidate))) actions.push(candidate)
+      if (actions.length === 3) break
+      continue
+    }
     let action
     if (unknown.kind === 'environment') action = 'provide-environment-value'
     if (unknown.kind === 'resource') action = 'provide-resource'
@@ -225,6 +244,7 @@ export class RecoveryCoordinator {
       throwIfAborted(signal)
       const runId = `recovery-${Date.now().toString(36)}-${attempt}`
       const result = await recoveryRuntime.execute({ runId, contract, recipe, signal })
+      throwIfAborted(signal)
       const runArtifact = await store.saveArtifact({
         kind: 'runtime-run',
         origin: 'derived',
@@ -237,7 +257,7 @@ export class RecoveryCoordinator {
       for (const output of result.outputs) {
         const artifact = await store.saveArtifact({
           kind: 'generated-output',
-          origin: 'derived',
+          origin: 'generated',
           sourceId: runArtifact.id,
           url: targetUrl,
           content: output,
@@ -246,6 +266,21 @@ export class RecoveryCoordinator {
         outputs.push({ ...output, artifactId: artifact.id })
       }
       rawUnknowns.push(...result.unknowns)
+
+      const nextStrategy = detectStrategy({ mode, result })
+      if (nextStrategy === 'algorithm-recovery') {
+        const validation = observedValidation(contract, outputs.map(({ artifactId }) => artifactId))
+        attempts.push(publicAttempt({ attempt, runId, result, outputs, validation }))
+        return algorithmResult({
+          sessionId: this.runtime.sessionId,
+          contract,
+          recipe,
+          graphArtifactId: graphArtifact.id,
+          attempts,
+          validation,
+          rawUnknowns,
+        })
+      }
 
       let validation
       try {
@@ -261,6 +296,7 @@ export class RecoveryCoordinator {
           signal,
         })
       } catch (error) {
+        if (signal?.aborted) throw signal.reason
         validation = {
           level: 'observed', accepted: false, status: null,
           expectedStatus: contract.success.status ?? null,
@@ -270,13 +306,17 @@ export class RecoveryCoordinator {
         }
       }
       if (!validation.accepted) {
-        rawUnknowns.push({
-          category: 'validation-result',
-          operation: 'validate-generated-output',
-          path: contract.request.url,
-          reason: validation.error || 'status-or-title-mismatch',
-          blocking: true,
-        })
+        if (validation.failure) {
+          rawUnknowns.push(validation.failure)
+        } else {
+          rawUnknowns.push({
+            category: 'validation-result',
+            operation: 'validate-generated-output',
+            path: contract.request.url,
+            reason: 'status-title-or-cookie-mismatch',
+            blocking: true,
+          })
+        }
       }
       const sourceId = outputs[0]?.artifactId || runArtifact.id
       finalValidationArtifact = await store.saveArtifact({
@@ -291,7 +331,10 @@ export class RecoveryCoordinator {
       attempts.push(publicAttempt({ attempt, runId, result, outputs, validation }))
 
       if (validation.accepted) {
-        const solverDir = join(this.runtime.paths.solvers, hashContract(contract).slice(0, 16))
+        const solverDir = join(
+          this.runtime.paths.solvers,
+          `${hashContract(contract).slice(0, 16)}-${hashRecipe(recipe).slice(0, 16)}`,
+        )
         const solver = await exportSolver({
           sessionId: this.runtime.sessionId,
           contract,
@@ -323,8 +366,6 @@ export class RecoveryCoordinator {
         }
       }
 
-      const nextStrategy = detectStrategy({ mode, result })
-      if (nextStrategy === 'algorithm-recovery') break
     }
 
     const unknowns = aggregateUnknowns(rawUnknowns)
@@ -332,7 +373,7 @@ export class RecoveryCoordinator {
     const suggestedRecipeActions = recipeActions(unknowns)
     return {
       sessionId: this.runtime.sessionId,
-      strategy: detectStrategy({ mode, result: { unknowns: rawUnknowns } }),
+      strategy,
       contract,
       recipe,
       graphArtifactId: graphArtifact.id,
