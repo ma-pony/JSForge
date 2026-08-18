@@ -18,7 +18,7 @@ npm install -g deepspider
 deepspider agent
 ```
 
-这是主启动命令。DSH Web 会加载 Spider Preset；新建一个 Session，说明目标 URL、触发路径和要恢复的 Cookie、Header、Query、Body、返回值或导航结果。多个 Session 可以同时运行，各自持有独立浏览器、SessionArtifactStore、Worker 和产物目录。
+这是主启动命令。DSH Web 会加载 Spider Preset；新建一个 Session，说明目标 URL、触发路径和目标输出。首版自动语义恢复只支持 Cookie。Header、Query、Body、返回值和导航仍可作为浏览器证据、Output Contract 和手工分析目标，但当前不会由高层工具自动生成 `reproduced` 结果或 Solver。多个 Session 可以同时运行，各自持有独立浏览器、SessionArtifactStore、Worker 和产物目录。
 
 `Ctrl+C` 会关闭 DSH Web，并等待所有 Session 的 Patchright Chromium、sdenv Worker 和运行资源退出。
 
@@ -27,12 +27,12 @@ deepspider agent
 - 沿真实请求的 Initiator、调用栈和脚本源码定位参数写入边界。
 - 分析动态执行、Webpack、Worker、WebAssembly、状态机和高度混淆代码。
 - 用 Hook、Debugger 和属性采集补足浏览器事实，而不是直接修改捕获源码。
-- 将浏览器依赖描述成可审计的 Runtime Recipe，再由独立 Worker 生成目标输出。
-- 用真实请求验证输出，并导出可以脱离浏览器 Session 重跑的 Solver。
+- 将 Cookie 生成所需的浏览器依赖描述成可审计的 Runtime Recipe，再由独立 Worker 执行。
+- 用真实请求验证自动生成的 Cookie，并导出可以脱离浏览器 Session 重跑的 Solver；其他输出继续使用通用浏览器、Hook、Debugger 和 Code Mode 定位与实现。
 
 ## 唯一完成定义
 
-一次恢复只有在以下链路全部成立时才算完成：Browser Oracle 已保存目标证据；Output Contract 与 Runtime Recipe 已绑定当前 Session；独立 sdenv Worker 用全新状态生成输出；CycleTLS 仅使用这些生成值完成真实请求；验证等级为 `reproduced`；导出的 Solver 能在浏览器关闭后再次得到同一验收结果。
+对于当前自动支持的 Cookie 恢复，只有以下链路全部成立才算完成：Browser Oracle 已保存目标证据；Output Contract 与 Runtime Recipe 已绑定当前 Session；独立 sdenv Worker 用全新状态生成 Cookie；CycleTLS 仅使用这些生成值完成真实请求；验证等级为 `reproduced`；导出的 Solver 能在浏览器关闭后再次得到同一验收结果。
 
 浏览器结果、页面自动化脚本、捕获 Cookie、单次 Hook 日志或仅能回放的请求都不是完成证据。
 
@@ -52,6 +52,8 @@ Browser Oracle → Session Artifact Graph → Output Contract → Runtime Recipe
 | sdenv Worker | 在独立 Node 子进程和全新 Cookie Jar 中执行页面语义 | 不读取 Patchright 最终输出或 `browser-data/` |
 | Request Validation | 仅用 Worker 生成值发起真实请求 | 状态与内容条件同时通过才是 `reproduced` |
 | Solver | 导出 Contract、Recipe 与独立入口 | 浏览器关闭后仍能重新生成并验证 |
+
+Output Contract 可以描述 Cookie、Header、Query、Body、返回值和导航。首版端到端自动链路只对 Cookie 实现 Worker 生成、真实请求验证和 Solver 导出；其余类型保留 Contract、Artifact Graph 和手工逆向能力，不宣称自动 `reproduced`。
 
 ### 三种证据等级
 
@@ -79,9 +81,9 @@ Patchright Session 是重要样本，但不是浏览器环境的唯一真值。�
 recover_target_output({ url, outputKind, outputSelector?, mode? })
 ```
 
-工具建立 Artifact Graph、Output Contract 和 Runtime Recipe，启动 Session-owned sdenv Worker，执行真实请求验证并导出 Solver。它只向 Agent 返回阶段状态、证据等级、策略、首个 blocker、Solver Artifact ID 和下一动作；源码、Cookie 值和完整运行日志保留在私有 Session Artifact 中。
+对于 Cookie Contract，工具建立 Artifact Graph、Output Contract 和 Runtime Recipe，启动 Session-owned sdenv Worker，执行真实请求验证并导出 Solver。Header、Query、Body、返回值和导航可以进入证据与 Contract，但当前高层工具不会为它们自动完成独立生成和 Solver 导出。工具只向 Agent 返回阶段状态、证据等级、策略、首个 blocker、Solver Artifact ID 和下一动作；源码、Cookie 值和完整运行日志保留在私有 Session Artifact 中。
 
-`mode: "auto"` 默认选择语义运行时。只有 Worker 报告不可执行的程序行为或用户明确要求时，才升级到局部算法恢复；不会因为代码混淆就直接推荐浏览器抓取，也不会默认完整还原整个解释器。
+`mode: "auto"` 默认选择语义运行时。`mode: "algorithm"` 当前没有自动算法引擎，会返回显式 `program` blocker：`algorithm-recovery-engine-not-implemented`。随后由 Agent 使用现有 Hook、Debugger 和 Code Mode 手工恢复影响目标输出的局部逻辑，或等待后续算法引擎实现；系统不会把未实现的升级描述成自动完成。
 
 ## 八阶段逆向工作流
 
@@ -96,11 +98,11 @@ intake → evidence → locate → recover → runtime → extraction → valida
 | locate | 沿 Initiator、调用栈和源码定位写入边界 | 参数来源与关键 Artifact |
 | recover | 还原桥接合约和影响输出的关键算子 | Output Contract |
 | runtime | 找到浏览器与独立运行时的首次分歧 | Runtime Recipe |
-| extraction | 按 blocker 分离算法与环境语义 | Worker 结果或局部算法实现 |
+| extraction | Agent 按 blocker 使用 Hook、Debugger 与 Code Mode 分离算法和环境语义 | Worker 结果或手工局部算法实现 |
 | validation | 用生成值完成真实请求 | `reproduced` Validation Artifact |
 | handoff | 固化身份、入口和运行说明 | Solver 或直接请求模块 |
 
-每轮只处理首个阻塞项：`environment` 表示缺失的浏览器语义，`resource` 表示依赖或网络响应问题，`program` 表示当前引擎无法执行的程序行为，`validation` 表示已生成输出但真实请求未接受。
+Coordinator 最多执行三次语义尝试，成功即停止。它不会在尝试之间自动修改 Runtime Recipe 或处理 blocker；三次均未通过时，只返回首个 blocker 和下一动作。Agent 再按该结果补充证据或手工修改 Recipe 后发起新一轮恢复。`environment` 表示缺失的浏览器语义，`resource` 表示依赖或网络响应问题，`program` 表示当前引擎无法执行的程序行为，`validation` 表示已生成输出但真实请求未接受。
 
 ## DSH Agent 与 Dialog
 
@@ -137,7 +139,7 @@ intake → evidence → locate → recover → runtime → extraction → valida
 | Hook | 显式注入与运行时日志查询 |
 | Stealth | 反调试拦截控制 |
 | Capture | 浏览器环境、属性描述符、原型与函数事实 |
-| Recovery | `recover_target_output` 的独立生成、真实请求验证和 Solver 导出 |
+| Recovery | `recover_target_output` 的 Cookie 独立生成、真实请求验证和 Solver 导出；其他输出保留证据与 Contract |
 
 工具数量由中央 Catalog 生成，不作为文档契约固定。
 
@@ -154,7 +156,7 @@ intake → evidence → locate → recover → runtime → extraction → valida
 └── browser-data/
 ```
 
-每个成功恢复会在 `solvers/` 下生成四个文件：
+每个成功的 Cookie 自动恢复会在 `solvers/` 下生成四个文件：
 
 ```text
 solver.mjs

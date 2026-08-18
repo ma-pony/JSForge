@@ -70,6 +70,20 @@ test('README dependency and authorization claims match the release contract', ()
   }
 })
 
+test('bilingual READMEs state the first-release semantic automation limits', () => {
+  assert.match(readmes[0], /首版自动语义恢复.*只支持 Cookie/s)
+  assert.match(readmes[0], /Header、Query、Body、返回值和导航.*证据.*Contract.*手工分析/s)
+  assert.match(readmes[0], /algorithm-recovery-engine-not-implemented/)
+  assert.match(readmes[0], /Coordinator 最多执行三次语义尝试.*成功即停止/s)
+  assert.match(readmes[0], /不会在尝试之间自动修改 Runtime Recipe 或处理 blocker/)
+
+  assert.match(readmes[1], /first-release automatic semantic recovery.*Cookie only/is)
+  assert.match(readmes[1], /Header, Query, Body, return-value, and navigation.*evidence.*Contract.*manual analysis/is)
+  assert.match(readmes[1], /algorithm-recovery-engine-not-implemented/)
+  assert.match(readmes[1], /Coordinator makes at most three semantic attempts.*stops on success/is)
+  assert.match(readmes[1], /does not modify the Runtime Recipe or handle a blocker between attempts/i)
+})
+
 test('published environment example only advertises supported settings', () => {
   assert.doesNotMatch(envExample, /DEEPSPIDER_USER_DATA_DIR|browser-profile/i)
 })

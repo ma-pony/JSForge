@@ -18,7 +18,7 @@ npm install -g deepspider
 deepspider agent
 ```
 
-This is the primary start command. DSH Web loads the Spider Preset. Create a Session and describe the target URL, trigger path, and the Cookie, Header, Query, Body, return value, or navigation output to recover. Multiple Sessions can run concurrently with isolated browsers, SessionArtifactStores, Workers, and artifact roots.
+This is the primary start command. DSH Web loads the Spider Preset. Create a Session and describe the target URL, trigger path, and target output. The first-release automatic semantic recovery supports Cookie only. Header, Query, Body, return-value, and navigation remain browser evidence, Output Contract, and manual analysis targets; the high-level tool does not currently produce an automatic `reproduced` result or Solver for them. Multiple Sessions can run concurrently with isolated browsers, SessionArtifactStores, Workers, and artifact roots.
 
 `Ctrl+C` closes DSH Web and waits for every Session-owned Patchright Chromium process, sdenv Worker, and runtime resource to exit.
 
@@ -27,12 +27,12 @@ This is the primary start command. DSH Web loads the Spider Preset. Create a Ses
 - Follow real request Initiators, call stacks, and script source to the parameter write boundary.
 - Analyze dynamic execution, Webpack, Workers, WebAssembly, state machines, and heavily obfuscated code.
 - Use Hooks, the Debugger, and property capture to fill evidence gaps without editing captured source in place.
-- Express browser dependencies as an auditable Runtime Recipe and generate the target output in an independent Worker.
-- Validate generated values against the real request and export a Solver that runs without the Browser Session.
+- Express browser dependencies required for Cookie generation as an auditable Runtime Recipe and execute them in an independent Worker.
+- Validate generated Cookies against the real request and export a Solver that runs without the Browser Session; use the general browser, Hook, Debugger, and Code Mode capabilities to locate and implement other output kinds.
 
 ## One definition of done
 
-Recovery is complete only when the Browser Oracle has stored target evidence; an Output Contract and Runtime Recipe belong to the current Session; an independent sdenv Worker generates the output from fresh state; CycleTLS sends a real request using only those generated values; the Validation level is `reproduced`; and the exported Solver reaches the same acceptance result after the browser has closed.
+For the currently automated Cookie path, recovery is complete only when the Browser Oracle has stored target evidence; an Output Contract and Runtime Recipe belong to the current Session; an independent sdenv Worker generates the Cookie from fresh state; CycleTLS sends a real request using only those generated values; the Validation level is `reproduced`; and the exported Solver reaches the same acceptance result after the browser has closed.
 
 Browser output, a page-automation script, captured Cookies, a single Hook log, or a request that only replays captured values is not completion evidence.
 
@@ -52,6 +52,8 @@ Browser Oracle → Session Artifact Graph → Output Contract → Runtime Recipe
 | sdenv Worker | Execute page semantics in an independent Node child and fresh Cookie Jar | Never read Patchright final outputs or `browser-data/` |
 | Request Validation | Send the real request using only Worker-generated values | Require both status and content conditions for `reproduced` |
 | Solver | Export the Contract, Recipe, and standalone entry point | Regenerate and validate after the browser has closed |
+
+An Output Contract can describe Cookie, Header, Query, Body, return-value, and navigation outputs. The first-release end-to-end automation implements Worker generation, real-request validation, and Solver export for Cookie only. Other kinds retain Contract, Artifact Graph, and manual reverse-engineering support without an automatic `reproduced` claim.
 
 ### Evidence levels
 
@@ -79,9 +81,9 @@ Normal recovery uses one high-level tool:
 recover_target_output({ url, outputKind, outputSelector?, mode? })
 ```
 
-The tool builds the Artifact Graph, Output Contract, and Runtime Recipe; starts the Session-owned sdenv Worker; performs real-request validation; and exports a Solver. It returns only stage status, evidence levels, strategy, the first blocker, Solver Artifact ID, and next action to the Agent. Source, Cookie values, and full diagnostics stay in private Session Artifacts.
+For a Cookie Contract, the tool builds the Artifact Graph, Output Contract, and Runtime Recipe; starts the Session-owned sdenv Worker; performs real-request validation; and exports a Solver. Header, Query, Body, return-value, and navigation can enter evidence and Contracts, but the high-level tool does not currently complete their independent generation or Solver export. It returns only stage status, evidence levels, strategy, the first blocker, Solver Artifact ID, and next action to the Agent. Source, Cookie values, and full diagnostics stay in private Session Artifacts.
 
-`mode: "auto"` selects the semantic runtime by default. Local algorithm recovery is an explicit escalation when the Worker reports non-executable program behavior or the user requests it. Obfuscation alone does not justify browser scraping, and DeepSpider does not default to recovering an entire interpreter.
+`mode: "auto"` selects the semantic runtime by default. `mode: "algorithm"` has no automatic algorithm engine yet and returns an explicit `program` blocker: `algorithm-recovery-engine-not-implemented`. The Agent can then use the existing Hook, Debugger, and Code Mode workflow to recover the local logic that affects the target output, or wait for a future algorithm engine. DeepSpider does not present this unimplemented escalation as automatic completion.
 
 ## Eight-stage reverse-engineering workflow
 
@@ -96,11 +98,11 @@ intake → evidence → locate → recover → runtime → extraction → valida
 | locate | Follow the Initiator, call stack, and source to the write boundary | Parameter origin and key Artifacts |
 | recover | Recover bridge contracts and operators that affect the output | Output Contract |
 | runtime | Find the first browser/independent-runtime divergence | Runtime Recipe |
-| extraction | Separate algorithm and environment semantics as required by the blocker | Worker result or local algorithm implementation |
+| extraction | Use Hook, Debugger, and Code Mode to separate algorithm and environment semantics as required by the blocker | Worker result or manually recovered local algorithm |
 | validation | Send the real request with generated values | `reproduced` Validation Artifact |
 | handoff | Freeze identity, entry points, and operating instructions | Solver or direct-request module |
 
-Each cycle handles the first blocker only: `environment` is a missing browser semantic, `resource` is a dependency or network-response problem, `program` is behavior the current engine cannot execute, and `validation` means an output was generated but the request rejected it.
+The Coordinator makes at most three semantic attempts and stops on success. It does not modify the Runtime Recipe or handle a blocker between attempts. If all three fail, it returns the first blocker and next action; the Agent may then collect evidence or manually change the Recipe before starting a new recovery run. `environment` is a missing browser semantic, `resource` is a dependency or network-response problem, `program` is behavior the current engine cannot execute, and `validation` means an output was generated but the request rejected it.
 
 ## DSH Agent and Dialog
 
@@ -137,7 +139,7 @@ When the output kind is ambiguous, login interaction is required, or algorithm r
 | Hook | Explicit injection and runtime log queries |
 | Stealth | Anti-debug interception control |
 | Capture | Browser environment, descriptors, prototypes, and function facts |
-| Recovery | Independent generation, real-request validation, and Solver export through `recover_target_output` |
+| Recovery | Cookie generation, real-request validation, and Solver export through `recover_target_output`; evidence and Contracts for other outputs |
 
 Catalog size is derived from code and is not a documentation contract.
 
@@ -154,7 +156,7 @@ Catalog size is derived from code and is not a documentation contract.
 └── browser-data/
 ```
 
-Every successful recovery creates four files under `solvers/`:
+Every successful automated Cookie recovery creates four files under `solvers/`:
 
 ```text
 solver.mjs
