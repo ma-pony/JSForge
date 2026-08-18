@@ -91,24 +91,28 @@ try {
     .filter(({ name, value }) => cookieName.test(name) && cookieValue.test(value))
   const anchorPresent = cookies.length > 0
     && (!contract.selector || cookies.some(({ name }) => name === contract.selector))
-  const headers = Object.fromEntries(Object.entries(contract.request.headers || {}).filter(([name]) => !blockedHeaders.has(name.toLowerCase())))
-  headers.Cookie = cookies.map(({ name, value }) => \`\${name}=\${value}\`).join('; ')
-  client = await initCycleTLS({ autoExit: false, timeout: recipe.timeoutMs })
-  const response = await client(contract.request.url, {
-    headers,
-    userAgent: recipe.userAgent,
-    responseType: 'text',
-    disableRedirect: true,
-    insecureSkipVerify: recipe.strictSSL === false,
-    timeout: recipe.timeoutMs,
-  }, contract.request.method.toLowerCase())
-  const body = typeof response.data === 'string' ? response.data : JSON.stringify(response.data ?? '')
-  const title = titleOf(body)
-  const accepted = anchorPresent
-    && (contract.success.status == null || response.status === contract.success.status)
-    && (contract.success.title == null || title === contract.success.title)
-  console.log(JSON.stringify({ level: accepted ? 'reproduced' : 'observed', accepted, status: response.status, expectedStatus: contract.success.status ?? null, title, expectedTitle: contract.success.title ?? null, outputCount: cookies.length, outputNames: cookies.map(({ name }) => name) }))
-  if (!accepted) process.exitCode = 1
+  if (!anchorPresent) {
+    console.log(JSON.stringify({ level: 'observed', accepted: false, status: null, expectedStatus: contract.success.status ?? null, title: null, expectedTitle: contract.success.title ?? null, outputCount: cookies.length, outputNames: cookies.map(({ name }) => name) }))
+    process.exitCode = 1
+  } else {
+    const headers = Object.fromEntries(Object.entries(contract.request.headers || {}).filter(([name]) => !blockedHeaders.has(name.toLowerCase())))
+    headers.Cookie = cookies.map(({ name, value }) => \`\${name}=\${value}\`).join('; ')
+    client = await initCycleTLS({ autoExit: false, timeout: recipe.timeoutMs })
+    const response = await client(contract.request.url, {
+      headers,
+      userAgent: recipe.userAgent,
+      responseType: 'text',
+      disableRedirect: true,
+      insecureSkipVerify: recipe.strictSSL === false,
+      timeout: recipe.timeoutMs,
+    }, contract.request.method.toLowerCase())
+    const body = typeof response.data === 'string' ? response.data : JSON.stringify(response.data ?? '')
+    const title = titleOf(body)
+    const accepted = (contract.success.status == null || response.status === contract.success.status)
+      && (contract.success.title == null || title === contract.success.title)
+    console.log(JSON.stringify({ level: accepted ? 'reproduced' : 'observed', accepted, status: response.status, expectedStatus: contract.success.status ?? null, title, expectedTitle: contract.success.title ?? null, outputCount: cookies.length, outputNames: cookies.map(({ name }) => name) }))
+    if (!accepted) process.exitCode = 1
+  }
 } catch (error) {
   console.log(JSON.stringify({ level: 'observed', accepted: false, error: error instanceof Error ? error.message : String(error) }))
   process.exitCode = 1

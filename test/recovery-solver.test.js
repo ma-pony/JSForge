@@ -24,7 +24,9 @@ async function run(file, cwd) {
 
 test('exported Solver rejects a matching response when sdenv generated no Cookie', { timeout: 15000 }, async (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-solver-cookie-anchor-'))
-  const server = http.createServer((_request, response) => {
+  let validationRequests = 0
+  const server = http.createServer((request, response) => {
+    if (request.url === '/validate') validationRequests += 1
     response.writeHead(200, { 'content-type': 'text/html' })
     response.end(`<title>Accepted</title><script>window.dispatchEvent(new CustomEvent('sdenv:exit'))</script>`)
   })
@@ -36,11 +38,11 @@ test('exported Solver rejects a matching response when sdenv generated no Cookie
     await new Promise((resolve) => server.close(resolve))
     fs.rmSync(temporary, { recursive: true, force: true })
   })
-  const url = `http://127.0.0.1:${server.address().port}/target`
+  const origin = `http://127.0.0.1:${server.address().port}`
   const directory = path.join(temporary, 'solver')
   const contract = createOutputContract({
-    kind: 'cookie', selector: null, entryUrl: url,
-    request: { method: 'GET', url, headers: {} },
+    kind: 'cookie', selector: null, entryUrl: `${origin}/entry`,
+    request: { method: 'GET', url: `${origin}/validate`, headers: {} },
     success: { status: 200, title: 'Accepted' },
   })
   const recipe = createRuntimeRecipe({ timeoutMs: 1000 })
@@ -63,4 +65,54 @@ test('exported Solver rejects a matching response when sdenv generated no Cookie
   const output = JSON.parse(result.stdout.trim().split('\n').at(-1))
   assert.equal(output.accepted, false)
   assert.equal(output.outputCount, 0)
+  assert.equal(validationRequests, 0)
+})
+
+test('exported Solver validates one legal generated selector Cookie', { timeout: 15000 }, async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-solver-cookie-success-'))
+  let validationRequests = 0
+  const server = http.createServer((request, response) => {
+    if (request.url === '/entry') {
+      response.writeHead(200, { 'content-type': 'text/html' })
+      response.end(`<title>Challenge</title><script>document.cookie='clearance=generated; Path=/';window.dispatchEvent(new CustomEvent('sdenv:exit'))</script>`)
+      return
+    }
+    validationRequests += 1
+    const accepted = request.headers.cookie === 'clearance=generated'
+    response.writeHead(accepted ? 200 : 412, { 'content-type': 'text/html' })
+    response.end(`<title>${accepted ? 'Accepted' : 'Challenge'}</title>`)
+  })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve))
+    fs.rmSync(temporary, { recursive: true, force: true })
+  })
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const directory = path.join(temporary, 'solver')
+  const contract = createOutputContract({
+    kind: 'cookie', selector: 'clearance', entryUrl: `${origin}/entry`,
+    request: { method: 'GET', url: `${origin}/validate`, headers: {} },
+    success: { status: 200, title: 'Accepted' },
+  })
+  await exportSolver({
+    sessionId: 'solver-success', contract, recipe: createRuntimeRecipe({ timeoutMs: 1000 }),
+    validation: {
+      level: 'reproduced', accepted: true,
+      generatedCookieCount: 1, generatedCookieNames: ['clearance'],
+    },
+    solverDir: directory,
+  })
+  fs.symlinkSync(path.resolve('node_modules'), path.join(directory, 'node_modules'), 'dir')
+
+  const result = await run(path.join(directory, 'solver.mjs'), directory)
+  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`)
+  const output = JSON.parse(result.stdout.trim().split('\n').at(-1))
+  assert.equal(output.accepted, true)
+  assert.equal(output.level, 'reproduced')
+  assert.equal(output.outputCount, 1)
+  assert.deepEqual(output.outputNames, ['clearance'])
+  assert.equal(validationRequests, 1)
 })

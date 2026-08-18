@@ -49,6 +49,16 @@ function scriptHash(url, source) {
   return contentHash(`${url}|${source || ''}`);
 }
 
+function ensureNextScriptSequence(index) {
+  if (Number.isSafeInteger(index.nextScriptSequence) && index.nextScriptSequence >= 0) return;
+  let next = 0;
+  for (const script of index.scripts || []) {
+    const match = String(script.id || '').match(/_(\d+)$/);
+    if (match) next = Math.max(next, Number(match[1]) + 1);
+  }
+  index.nextScriptSequence = next;
+}
+
 /**
  * 主机名 → 安全目录名：仅允许 hostname 合法字符，禁止 . / .. 等遍历语义
  */
@@ -384,6 +394,7 @@ export class SessionArtifactStore {
       hostname: site,
       responses: [],  // { id, url, path, method, status, timestamp, file }
       scripts: [],    // { id, url, type, timestamp, file }
+      nextScriptSequence: 0,
       crypto: []
     };
 
@@ -394,6 +405,7 @@ export class SessionArtifactStore {
     } catch {
       // 使用默认索引
     }
+    ensureNextScriptSequence(index);
 
     this.siteIndexCache.set(site, index);
     // 注意：从磁盘加载的站点索引不预填充搜索索引
@@ -542,7 +554,8 @@ export class SessionArtifactStore {
       ensureSecureDir(scriptsDir);
 
       const readableName = getReadableFilename(url, 'script');
-      const seq = String(index.scripts.length).padStart(3, '0');
+      const seq = String(index.nextScriptSequence).padStart(3, '0');
+      index.nextScriptSequence += 1;
       const id = `${readableName}_${seq}`;
       const file = join(scriptsDir, `${readableName}_${hash}.js`);
       const sourceDeduplicated = existsSync(file);

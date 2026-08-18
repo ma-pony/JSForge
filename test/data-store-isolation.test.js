@@ -199,6 +199,49 @@ test('repeated script captures keep immutable occurrences while sharing one sour
   assert.deepEqual(scriptNodes.map(({ parentScriptId }) => parentScriptId), ['parent-1', 'parent-2'])
 })
 
+test('script occurrence IDs remain unique after cleanup removes an earlier capture', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-script-sequence-'))
+  const store = new SessionArtifactStore({ root: path.join(temporary, 'evidence') })
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+  const sessionId = store.startSession()
+  const now = Date.now()
+  const capture = (number) => store.saveScript({
+    url: 'https://sequence.test/app.js', type: 'dynamic', source: 'window.sameBlob = true',
+    timestamp: now + number, pageUrl: `https://sequence.test/page-${number}`,
+    cdpScriptId: `script-${number}`, parentScriptId: `parent-${number}`,
+  })
+  const first = await capture(1)
+  const second = await capture(2)
+  const third = await capture(3)
+  const beforeCleanup = await store.getSiteIndex('sequence.test')
+  const retained = beforeCleanup.scripts.slice(1).map((entry) => JSON.parse(JSON.stringify(entry)))
+  delete beforeCleanup.nextScriptSequence
+  await store.saveSiteIndex('sequence.test')
+  store.siteIndexCache.delete('sequence.test')
+  const migratedIndex = await store.getSiteIndex('sequence.test')
+  assert.equal(migratedIndex.nextScriptSequence, 3)
+  migratedIndex.scripts[0].timestamp = now - (8 * 24 * 60 * 60 * 1000)
+  await store.saveSiteIndex('sequence.test')
+  await store.cleanupExpired(now)
+  const fourth = await capture(4)
+
+  const historicalIds = [first.id, second.id, third.id, fourth.id]
+  const index = await store.getSiteIndex('sequence.test')
+  assert.equal(new Set(historicalIds).size, 4)
+  assert.equal(index.scripts.length, 3)
+  assert.equal(new Set(index.scripts.map(({ id }) => id)).size, 3)
+  assert.deepEqual(index.scripts.slice(0, 2), retained)
+  assert.equal(index.scripts[2].cdpScriptId, 'script-4')
+  assert.equal(new Set(index.scripts.map(({ file }) => file)).size, 1)
+  assert.equal((await store.searchInScripts('sameblob', 'sequence.test')).length, 3)
+
+  const graph = await buildArtifactGraph({ store, sessionId })
+  const scriptNodes = graph.nodes.filter(({ kind }) => kind === 'script')
+  assert.equal(scriptNodes.length, 3)
+  assert.equal(new Set(scriptNodes.map(({ id }) => id)).size, 3)
+  assert.deepEqual(scriptNodes.map(({ parentScriptId }) => parentScriptId), ['parent-2', 'parent-3', 'parent-4'])
+})
+
 test('replay lookup matches the exact request only inside the current Session', async (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-data-store-replay-'))
   const store = new SessionArtifactStore({ root: path.join(temporary, 'data') })
