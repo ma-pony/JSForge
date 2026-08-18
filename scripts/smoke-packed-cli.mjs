@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -24,6 +25,99 @@ function readSourceTree(root) {
   return sources.join('\n')
 }
 
+async function startSemanticTarget() {
+  const cookie = 'packed_semantic=installed-runtime; Path=/'
+  const server = http.createServer((request, response) => {
+    const accepted = String(request.headers.cookie || '').split(/;\s*/).includes(
+      cookie.replace(/; Path=\/$/, ''),
+    )
+    if (!accepted) {
+      response.writeHead(412, { 'content-type': 'text/html; charset=utf-8' })
+      response.end([
+        '<!doctype html><title>Packed Semantic Challenge</title>',
+        '<script>',
+        `document.cookie = ${JSON.stringify(cookie)};`,
+        'location.replace(location.href);',
+        '</script>',
+      ].join(''))
+      return
+    }
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    response.end('<!doctype html><title>Packed Semantic Accepted</title>')
+  })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const { port } = server.address()
+  return {
+    url: `http://127.0.0.1:${port}/acceptance`,
+    close: () => new Promise((resolve, reject) => server.close((error) => (
+      error ? reject(error) : resolve()
+    ))),
+  }
+}
+
+async function smokeInstalledSemanticRuntime(installedPackageRoot) {
+  const target = await startSemanticTarget()
+  const runsDir = path.join(tempRoot, 'semantic-runs')
+  fs.mkdirSync(runsDir)
+  const { createOutputContract } = await import(pathToFileURL(
+    path.join(installedPackageRoot, 'src', 'recovery', 'contracts.js'),
+  ))
+  const { createRuntimeRecipe } = await import(pathToFileURL(
+    path.join(installedPackageRoot, 'src', 'recovery', 'recipe.js'),
+  ))
+  const { SdenvRuntimeAdapter } = await import(pathToFileURL(
+    path.join(installedPackageRoot, 'src', 'recovery', 'runtime', 'sdenv-adapter.js'),
+  ))
+  const { validateGeneratedOutput } = await import(pathToFileURL(
+    path.join(installedPackageRoot, 'src', 'recovery', 'validation.js'),
+  ))
+  const recipe = createRuntimeRecipe({ timeoutMs: 10000 })
+  const contract = createOutputContract({
+    kind: 'cookie',
+    selector: 'packed_semantic',
+    entryUrl: target.url,
+    request: { url: target.url, method: 'GET', headers: {} },
+    success: { status: 200, title: 'Packed Semantic Accepted' },
+  })
+  const runtime = new SdenvRuntimeAdapter({
+    sessionId: 'packed-semantic-smoke',
+    runsDir,
+    env: {
+      ...process.env,
+      NO_PROXY: '127.0.0.1,localhost',
+      no_proxy: '127.0.0.1,localhost',
+    },
+  })
+  try {
+    const result = await runtime.execute({ runId: 'native-run', contract, recipe })
+    assert.equal(result.ok, true)
+    assert.equal(result.engine.name, 'sdenv')
+    assert.ok(result.engine.version)
+    assert.ok(result.outputs.some(({ kind, name }) => kind === 'cookie' && name === contract.selector))
+    assert.ok(result.events.some(({ type }) => type === 'sdenv:exit'))
+    const validation = await validateGeneratedOutput({
+      contract,
+      outputs: result.outputs,
+      requestTemplate: {
+        headers: contract.request.headers,
+        userAgent: recipe.userAgent,
+        strictSSL: recipe.strictSSL,
+        timeoutMs: recipe.timeoutMs,
+      },
+    })
+    assert.equal(validation.level, 'reproduced')
+    assert.equal(validation.accepted, true)
+    assert.equal(validation.status, 200)
+    assert.equal(validation.title, contract.success.title)
+  } finally {
+    await runtime.close('packed semantic smoke complete')
+    await target.close()
+  }
+}
+
 try {
   const packed = JSON.parse(
     execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', tempRoot], {
@@ -34,6 +128,11 @@ try {
   )
   const tarballPath = path.join(tempRoot, packed[0].filename)
   execFileSync('npm', ['install', '--ignore-scripts', tarballPath], {
+    cwd: installDir,
+    env: npmEnv,
+    stdio: 'inherit',
+  })
+  execFileSync('npm', ['rebuild', 'sdenv', '--ignore-scripts=false'], {
     cwd: installDir,
     env: npmEnv,
     stdio: 'inherit',
@@ -128,6 +227,7 @@ try {
   assert.match(managedPreset, /disabled: !!js process\.platform/)
   assert.equal(managedPatch.includes(JSON.stringify(layout.hostPluginPath)), true)
   assert.equal(managedPreset.includes(JSON.stringify(layout.agentPluginPath)), true)
+  await smokeInstalledSemanticRuntime(installedPackageRoot)
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }

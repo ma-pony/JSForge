@@ -3,9 +3,9 @@
 [![npm version](https://img.shields.io/npm/v/deepspider.svg)](https://www.npmjs.com/package/deepspider)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-DeepSpider 是基于 DSH 的 JavaScript 逆向工程平台。它用 Patchright Chromium 和 CDP 取得真实请求、脚本与运行时证据，再把关键逻辑还原成可离线执行、可通过真实请求验证的 JavaScript 或 Python 实现。
+> AI 原生的 JavaScript 逆向工程平台——从真实请求证据出发，定位参数生成链路，并交付可直接请求的实现与可运行 Solver。
 
-浏览器负责提供证据。最终交付应能解释参数生成链路，并在不依赖页面自动化的情况下完成目标请求。
+DeepSpider 将 DSH Web、Patchright Chromium、Chrome DevTools Protocol（CDP）和独立 Node 语义运行时组合成一套逆向工作台。浏览器负责采集请求、脚本与运行时事实；最终结果必须由非浏览器运行时重新生成，并通过真实请求验证，而不是停留在页面自动化或一次抓取结果。
 
 [English](README_EN.md)
 
@@ -18,86 +18,100 @@ npm install -g deepspider
 deepspider agent
 ```
 
-DSH Web 启动后会加载 Spider Preset。创建一个 Session，描述目标请求、页面触发路径和希望得到的 JavaScript 或 Python 交付物。多个 Session 可以同时运行，各自持有独立的浏览器、SessionArtifactStore 和产物目录。
+这是主启动命令。DSH Web 会加载 Spider Preset；新建一个 Session，说明目标 URL、触发路径和要恢复的 Cookie、Header、Query、Body、返回值或导航结果。多个 Session 可以同时运行，各自持有独立浏览器、SessionArtifactStore、Worker 和产物目录。
 
-```bash
-deepspider agent --port 3080 --verbose
-```
+`Ctrl+C` 会关闭 DSH Web，并等待所有 Session 的 Patchright Chromium、sdenv Worker 和运行资源退出。
 
-`Ctrl+C` 会关闭 DSH Web、全部 DeepSpider Runtime 及其关联浏览器。
+## DeepSpider 解决什么问题
 
-## 完成标准
+- 沿真实请求的 Initiator、调用栈和脚本源码定位参数写入边界。
+- 分析动态执行、Webpack、Worker、WebAssembly、状态机和高度混淆代码。
+- 用 Hook、Debugger 和属性采集补足浏览器事实，而不是直接修改捕获源码。
+- 将浏览器依赖描述成可审计的 Runtime Recipe，再由独立 Worker 生成目标输出。
+- 用真实请求验证输出，并导出可以脱离浏览器 Session 重跑的 Solver。
 
-一次逆向任务至少应交付：
+## 唯一完成定义
 
-- Browser Oracle 捕获的目标请求与脚本证据；
-- 明确的 Output Contract 与当前 Session 的 Runtime Recipe；
-- 独立 Node Worker 生成的目标输出；
-- 使用生成值完成的真实请求验证，证据等级为 `reproduced`；
-- 可脱离浏览器 Session 运行的 Solver。
+一次恢复只有在以下链路全部成立时才算完成：Browser Oracle 已保存目标证据；Output Contract 与 Runtime Recipe 已绑定当前 Session；独立 sdenv Worker 用全新状态生成输出；CycleTLS 仅使用这些生成值完成真实请求；验证等级为 `reproduced`；导出的 Solver 能在浏览器关闭后再次得到同一验收结果。
 
-浏览器抓取结果、页面自动化脚本或单次 Hook 日志只属于证据，不代表逆向已经完成。
+浏览器结果、页面自动化脚本、捕获 Cookie、单次 Hook 日志或仅能回放的请求都不是完成证据。
 
-## 语义恢复流程
+## 输出驱动的语义恢复
 
 ```text
-Browser Oracle → Artifact Graph → Output Contract → Runtime Recipe → Worker → Request Validation → Solver
+Browser Oracle → Session Artifact Graph → Output Contract → Runtime Recipe
+               → sdenv Worker → Real-request Validation → Solver
 ```
 
-| 阶段 | 行为 | 约束 |
+| 阶段 | 作用 | 边界 |
 | --- | --- | --- |
-| Browser Oracle | 打开页面、触发请求、捕获网络、脚本和属性事实 | 浏览器结果只标记为 `observed` |
-| Artifact Graph | 关联 Document、Script、请求、响应和动态源码 | 所有证据绑定当前 Session |
-| Output Contract | 指定 Cookie、Header、Query、Body、返回值或导航输出 | 成功条件同时约束请求状态和页面内容 |
-| Runtime Recipe | 声明固定值、属性隐藏和运行边界 | 站点规则保留在 Session，不写进通用底层 |
-| Worker | 用全新状态独立执行目标页面 | 不读取 Patchright Cookie 或 browser-data |
-| Request Validation | 只用 Worker 生成值发起真实请求 | 通过后才标记为 `reproduced` |
-| Solver | 导出 Contract、Recipe 与独立运行入口 | 无需关联浏览器即可重跑 |
+| Browser Oracle | 用 Patchright Chromium + CDP 观察真实页面、请求、脚本和运行时事实 | 浏览器最终值只形成 `observed` 证据 |
+| Session Artifact Graph | 关联 Document、Script、动态源码、请求、响应及后续恢复产物 | 原始内容不可覆盖，所有节点属于当前 Session |
+| Output Contract | 定义要生成的输出和请求成功条件 | 只恢复影响目标输出的语义 |
+| Runtime Recipe | 声明固定值、属性隐藏、window proxy、UA、TLS 与超时 | 站点规则留在 Session Recipe，不进入通用底层分支 |
+| sdenv Worker | 在独立 Node 子进程和全新 Cookie Jar 中执行页面语义 | 不读取 Patchright 最终输出或 `browser-data/` |
+| Request Validation | 仅用 Worker 生成值发起真实请求 | 状态与内容条件同时通过才是 `reproduced` |
+| Solver | 导出 Contract、Recipe 与独立入口 | 浏览器关闭后仍能重新生成并验证 |
 
-Patchright 控制的当前 Session 是一个重要样本，不是浏览器环境的唯一真值。遇到指纹或时序问题时，应结合普通 Chrome、多个 Session 或已确认的目标行为交叉判断。
+### 三种证据等级
 
-### Runtime Recipe
+| 等级 | 含义 |
+| --- | --- |
+| `observed` | 来自 Browser Oracle 的真实观察，可用于定位和建立 Contract |
+| `replayed` | 使用已捕获值或响应重放，只能用于诊断和对照 |
+| `reproduced` | 独立 Node 运行时重新生成目标输出，并通过真实请求验证 |
 
-`recover_target_output` 默认使用当前 Session 的证据建立 Output Contract，并在独立 Worker 中执行 Runtime Recipe。Recipe 可以声明：
+### Runtime Recipe 的站点边界
 
-- 固定值和确定的站点规则；
-- 需要隐藏的属性路径；
-- window proxy 配置；
-- User-Agent、TLS 校验和有界超时。
+确定的固定指纹、属性隐藏、window proxy 配置和站点规则可以写入当前 Session 的 Runtime Recipe。Recipe 与 Contract、引擎版本、上游 Artifact ID 和 SHA-256 一起进入生成结果身份链。通用底层只执行声明式规则，不按站点名称、Cookie 名或风控厂商分支。
 
-确定且稳定的指纹或站点规则可以直接保留在任务 Recipe 中。当前 Patchright Session 只是证据样本；敏感指纹应结合普通 Chrome、多个 Session 或已确认目标行为判断。
+Patchright Session 是重要样本，但不是浏览器环境的唯一真值。遇到自动化特征或时序差异时，可结合普通 Chrome、多个 Session 或已确认的目标行为采集新证据，再更新 Recipe。
 
 ### 原始证据与派生产物
 
-捕获的脚本、响应和动态源码以 `observed` Artifact 保存，内容不可覆盖。格式化、去混淆或定点处理必须新建 `derived` Artifact，并保留来源 Artifact ID 和内容哈希。Worker 输出属于 `generated` Artifact，只有请求验证通过才升级为 `reproduced` 证据。
+捕获的脚本、响应和动态源码保存为不可变 `observed` Artifact。格式化、去混淆或定点处理会创建新的 `derived` Artifact，并保留来源 ID、变换说明和内容哈希。Worker 输出保存为 `generated` Artifact；只有真实请求验证通过，结果才达到 `reproduced`。
 
-### 八阶段逆向工作流
+## 一个恢复入口
+
+正常恢复只使用高层工具：
+
+```text
+recover_target_output({ url, outputKind, outputSelector?, mode? })
+```
+
+工具建立 Artifact Graph、Output Contract 和 Runtime Recipe，启动 Session-owned sdenv Worker，执行真实请求验证并导出 Solver。它只向 Agent 返回阶段状态、证据等级、策略、首个 blocker、Solver Artifact ID 和下一动作；源码、Cookie 值和完整运行日志保留在私有 Session Artifact 中。
+
+`mode: "auto"` 默认选择语义运行时。只有 Worker 报告不可执行的程序行为或用户明确要求时，才升级到局部算法恢复；不会因为代码混淆就直接推荐浏览器抓取，也不会默认完整还原整个解释器。
+
+## 八阶段逆向工作流
 
 ```text
 intake → evidence → locate → recover → runtime → extraction → validation → handoff
 ```
 
-| 阶段 | 任务 | 产物 |
+| 阶段 | 核心任务 | 主要产物 |
 | --- | --- | --- |
-| intake | 明确请求、触发路径与交付要求 | 结构化目标 |
-| evidence | 复现并读取完整请求与响应 | 请求链证据 |
-| locate | 沿 Initiator、调用栈和源码定位写入边界 | 参数来源 |
-| recover | 还原桥接合约和关键算子 | 可调用函数 |
-| runtime | 找到浏览器与本地运行的首次分歧 | Environment Recipe |
-| extraction | 分离算法与运行环境 | 独立实现与 fixtures |
-| validation | 对比多组输入和真实请求 | 验证记录 |
-| handoff | 整理运行入口、配置和说明 | 可运行爬虫或请求模块 |
+| intake | 明确目标请求、触发路径和交付要求 | 结构化目标与输出类型 |
+| evidence | 在真实页面复现请求并读取完整响应 | Browser Oracle 证据 |
+| locate | 沿 Initiator、调用栈和源码定位写入边界 | 参数来源与关键 Artifact |
+| recover | 还原桥接合约和影响输出的关键算子 | Output Contract |
+| runtime | 找到浏览器与独立运行时的首次分歧 | Runtime Recipe |
+| extraction | 按 blocker 分离算法与环境语义 | Worker 结果或局部算法实现 |
+| validation | 用生成值完成真实请求 | `reproduced` Validation Artifact |
+| handoff | 固化身份、入口和运行说明 | Solver 或直接请求模块 |
 
-## DSH Agent 能力
+每轮只处理首个阻塞项：`environment` 表示缺失的浏览器语义，`resource` 表示依赖或网络响应问题，`program` 表示当前引擎无法执行的程序行为，`validation` 表示已生成输出但真实请求未接受。
 
-- **Sessions**：多个任务并行运行，浏览器与文件按 Session 隔离。
+## DSH Agent 与 Dialog
+
+- **Sessions**：多个任务并行运行，浏览器、Worker 与文件相互隔离。
 - **Goals 与 Todo**：分别记录任务目标和当前执行项。
-- **Code Mode**：通过 `run_code` 使用生成的 TypeScript SDK 调用 DeepSpider 工具。
+- **Code Mode**：通过 `run_code` 与生成的 TypeScript SDK 调用 DeepSpider 工具。
 - **Cordis 动态工具**：按当前 Agent 权限检查和调用运行时能力。
-- **Web Search**：用于查找公开资料；页面证据仍由 DeepSpider 浏览器工具采集。
-- **Dialog**：浏览器页面中的可选交互面板，支持对话、元素或 iframe 选择，以及 DSH 原生单选、多选和自定义答案。
+- **Web Search**：查找公开资料；真实页面事实仍由 Browser Oracle 采集。
+- **Dialog**：浏览器内的可选交互面板，显示浏览器证据、Artifact Graph、Node 生成和请求验证四段状态。
 
-`browser_dialog` 只在当前 Session 已启动浏览器时打开或发送消息。问题回答会回到同一个 DSH Session；打开 Dialog 不会自动启用 Probe。
+输出类型不明确、需要登录操作或需要升级算法恢复时，DeepSpider 使用 DSH 原生单选、多选和自定义答案协议。`browser_dialog` 只在当前 Session 已启动浏览器时打开；回答回到同一 Session，不会建立第二套对话状态。
 
 ## 使用方式
 
@@ -110,11 +124,9 @@ intake → evidence → locate → recover → runtime → extraction → valida
 | `deepspider --version` | 显示版本 |
 | `deepspider --help` | 显示帮助 |
 
-`fetch` 不启动浏览器，也不进入 Agent 逆向流程。MCP stdio 适配器面向需要直接接入 DeepSpider 工具目录的外部客户端；完整的多 Session 工作流使用 DSH Web。
+`fetch` 不启动浏览器，也不进入 Agent 逆向流程。MCP stdio 外部适配器向其他客户端提供同一中央工具目录；完整的多 Session 工作流使用 DSH Web。
 
 ## 工具目录
-
-DeepSpider 从同一中央 Catalog 向 DSH 与 MCP 暴露工具，数量由代码生成，不在文档中固定：
 
 | 工具组 | 能力 |
 | --- | --- |
@@ -125,24 +137,24 @@ DeepSpider 从同一中央 Catalog 向 DSH 与 MCP 暴露工具，数量由代�
 | Hook | 显式注入与运行时日志查询 |
 | Stealth | 反调试拦截控制 |
 | Capture | 浏览器环境、属性描述符、原型与函数事实 |
-| Recovery | `recover_target_output` 统一完成独立生成、真实请求验证与 Solver 导出 |
+| Recovery | `recover_target_output` 的独立生成、真实请求验证和 Solver 导出 |
 
-## 产物
+工具数量由中央 Catalog 生成，不作为文档契约固定。
 
-每个 Agent Session 的根目录为：
+## Session 产物与 Solver
 
 ```text
 ~/.deepspider/sessions/<sha256(agent.id)>/
-├── evidence/             # SessionArtifactStore 根目录
+├── evidence/
 │   ├── sites/            # 请求、响应、脚本与站点索引
-│   └── artifacts/        # Artifact Graph、Contract、Recipe、运行与验证产物
-├── runs/                 # sdenv Worker 运行目录
+│   └── artifacts/        # Artifact Graph、Contract、Recipe、Run、Validation、Solver
+├── runs/                 # sdenv Worker 请求、结果与诊断
 ├── solvers/              # 可独立运行的 Solver
-├── screenshots/          # Session 截图
+├── screenshots/
 └── browser-data/
 ```
 
-每个成功恢复会在 `solvers/` 下生成独立目录，其中包含：
+每个成功恢复会在 `solvers/` 下生成四个文件：
 
 ```text
 solver.mjs
@@ -151,59 +163,54 @@ recipe.json
 package.json
 ```
 
+在该目录使用 npm 安装并运行，安装阶段会构建 sdenv 原生模块：
+
+```bash
+npm install
+node solver.mjs
+```
+
+Solver 创建全新 Cookie Jar，不导入 Patchright，也不读取 Session 的 `browser-data/` 或捕获 Cookie。它输出紧凑的验证结果，并在退出前关闭 sdenv 与 CycleTLS。
+
 ## 架构
 
 ```text
 DSH Web Host Plane
-├── Session、模型、Goals、Todo、Cordis 与事件路由
+├── Sessions、模型、Goals、Todo、Cordis 与事件路由
 └── Spider Agent Plane
     ├── Code Mode + DeepSpider Catalog
     └── Session-owned DeepSpider Runtime
-        ├── Patchright Chromium + CDP
-        ├── Dialog + Browser Oracle
-        ├── SessionArtifactStore + Artifact Graph
+        ├── Patchright Chromium + CDP + Dialog
+        ├── Browser Oracle + SessionArtifactStore
+        ├── Session Artifact Graph + RecoveryCoordinator
         └── sdenv Worker + CycleTLS Validator + Solver
 
 MCP stdio adapter
 └── 同一 DeepSpider Catalog
 ```
 
-Host Plane 管理应用级服务和多个 Session。Agent Plane 在单个 Session 内执行逆向任务。每个 Plane 的状态边界由 RuntimeManager 维护。
+Host Plane 管理应用级服务和多个 Session；Agent Plane 在单个 Session 内执行逆向任务。RuntimeManager 维护状态边界。Session 被销毁或 Host 收到退出信号时，DeepSpider 先中止当前操作并关闭 Worker，再关闭 Dialog、CDP、Patchright Chromium 和 Store。
 
-## 从源码运行
+## 开发与发布验证
 
-开发环境使用 Node.js `>=24.15.0` 和 pnpm `11.21.0`。
+源码开发使用 Node.js `>=24.15.0` 和 pnpm `11.21.0`。
 
 ```bash
 git clone https://github.com/ma-pony/deepspider.git
 cd deepspider
 pnpm install
 
-node bin/cli.js agent --port 3080 --verbose
-```
-
-无头浏览器：
-
-```bash
-export DEEPSPIDER_HEADLESS=true
-```
-
-验证命令：
-
-```bash
 pnpm test
 pnpm lint
-pnpm audit --prod
 pnpm test:integration
 pnpm smoke:pack
-npm pack --dry-run
 ```
 
-集成测试需要本机允许启动 Patchright Chromium。DeepSpider 不会自动加载项目根目录的 `.env`。
+集成测试需要本机允许启动 Patchright Chromium。DeepSpider 不会自动加载项目根目录的 `.env`；无头模式可显式设置 `DEEPSPIDER_HEADLESS=true`。
 
 ## 授权边界
 
-DSH 保存模型 provider 的设置与凭据。DeepSpider 不内置账号。Cordis、浏览器调试、脚本执行和网络访问属于高权限能力，只应在可信任务中使用。请仅分析自己拥有或已获授权的目标，并遵守目标条款和适用法律。
+DSH 保存模型 provider 设置与凭据，DeepSpider 不内置账号。Cordis、浏览器调试、脚本执行和网络访问属于高权限能力，只应在可信任务中使用。请仅分析自己拥有或已获授权的目标，并遵守目标条款和适用法律。
 
 ## License
 
