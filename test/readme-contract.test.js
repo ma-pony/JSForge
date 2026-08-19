@@ -55,13 +55,13 @@ test('package metadata identifies the current product and runtime floor', () => 
   assert.match(packageJson.description, /JavaScript reverse-engineering/i)
   assert.match(packageJson.description, /\bDSH\b/)
   assert.equal(packageJson.engines.node, '>=24.15.0')
-  assert.equal(packageJson.packageManager, 'pnpm@11.21.0')
+  assert.equal(packageJson.packageManager, 'pnpm@11.22.0')
 })
 
 test('README dependency and authorization claims match the release contract', () => {
   for (const text of readmes) {
     assert.match(text, /Node\.js `>=24\.15\.0`/)
-    assert.match(text, /pnpm `11\.21\.0`/)
+    assert.match(text, /pnpm `11\.22\.0`/)
     assert.match(text, /Cordis/)
     assert.match(text, /Session/)
     assert.match(text, /Goals/)

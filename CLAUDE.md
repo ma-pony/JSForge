@@ -44,4 +44,4 @@ pnpm smoke:pack
 npm pack --dry-run
 ```
 
-Development requires Node.js `>=24.15.0` and pnpm `11.21.0`. Browser integration tests require Patchright Chromium and permission to start local Chromium child processes.
+Development requires Node.js `>=24.15.0` and pnpm `11.22.0`. Browser integration tests require Patchright Chromium and permission to start local Chromium child processes.

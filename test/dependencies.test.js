@@ -67,6 +67,16 @@ test('manifest declares the native DSH package channel policy', () => {
   assert.equal(root.dependencies['@deepseek-ai/dsh-tools'], 'next')
 })
 
+test('manifest publishes DeepSpider as a native DSH bundle', () => {
+  assert.deepEqual(root.dsh, { bundle: { patch: './dsh/cordis.patch.yml' } })
+  assert.equal(root.main, 'src/dsh/host-plugin.js')
+  assert.equal(root.exports['.'], './src/dsh/host-plugin.js')
+  assert.equal(root.exports['./agent-plugin'], './src/dsh/agent-plugin.js')
+  assert.equal(root.exports['./preset-plugin'], './src/dsh/preset-plugin.js')
+  assert.equal(root.exports['./cordis.patch.yml'], './dsh/cordis.patch.yml')
+  assert.ok(root.keywords.includes('dsh-plugin'))
+})
+
 test('manifest declares the reviewed semantic runtime channel', () => {
   assert.equal(root.dependencies.sdenv, 'latest')
 })
@@ -76,7 +86,7 @@ test('manifest requires the audited MCP SDK release line', () => {
 })
 
 test('manifest pins the package manager used by CI', () => {
-  assert.equal(root.packageManager, 'pnpm@11.21.0')
+  assert.equal(root.packageManager, 'pnpm@11.22.0')
 })
 
 test('ESLint packages use one compatible major release', () => {
@@ -139,8 +149,8 @@ test('publish job rebuilds sdenv after the frozen install and provisions Patchri
     ]
   )
   assert.equal(workflow.jobs.publish.needs, 'test')
-  assert.equal(setupStep(workflow.jobs.test.steps, 'pnpm/action-setup@v4').with.version, '11.21.0')
-  assert.equal(setupStep(workflow.jobs.publish.steps, 'pnpm/action-setup@v4').with.version, '11.21.0')
+  assert.equal(setupStep(workflow.jobs.test.steps, 'pnpm/action-setup@v4').with.version, '11.22.0')
+  assert.equal(setupStep(workflow.jobs.publish.steps, 'pnpm/action-setup@v4').with.version, '11.22.0')
   assert.equal(setupStep(workflow.jobs.test.steps, 'actions/setup-node@v4').with['node-version'], '24.15.0')
   assert.equal(setupStep(workflow.jobs.publish.steps, 'actions/setup-node@v4').with['node-version'], '24.15.0')
 })
@@ -151,7 +161,7 @@ test('DSH refresh workflow reports dependency drift through the full release gat
 
   assert.ok(workflow.on.schedule)
   assert.deepEqual(workflow.on.workflow_dispatch, null)
-  assert.equal(setupStep(workflow.jobs.refresh.steps, 'pnpm/action-setup@v4').with.version, '11.21.0')
+  assert.equal(setupStep(workflow.jobs.refresh.steps, 'pnpm/action-setup@v4').with.version, '11.22.0')
   assert.equal(setupStep(workflow.jobs.refresh.steps, 'actions/setup-node@v4').with['node-version'], '24.15.0')
   assert.deepEqual(runs, [
     'pnpm update @deepseek-ai/dsh@latest @deepseek-ai/dsh-host-apiproxy@next @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-tools@next --ignore-scripts',

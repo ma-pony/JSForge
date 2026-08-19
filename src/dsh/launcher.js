@@ -1,11 +1,13 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const defaultPackageRoot = fileURLToPath(new URL('../..', import.meta.url))
+const profileName = 'web'
+const bundleName = 'deepspider'
 
 export function resolveDshBinary({ packageJsonPath } = {}) {
   const manifestPath = packageJsonPath ?? createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')
@@ -18,51 +20,71 @@ export function resolveDshBinary({ packageJsonPath } = {}) {
 export function resolveDshLayout({ packageRoot = defaultPackageRoot, env = process.env } = {}) {
   const dshHome = env.DSH_HOME || path.join(os.homedir(), '.dsh')
   const packageRequire = createRequire(path.join(packageRoot, 'package.json'))
+  const profileDir = path.join(dshHome, 'profiles', profileName)
   return {
     packageRoot,
     dshHome,
+    env,
     dshBinary: resolveDshBinary({
       packageJsonPath: packageRequire.resolve('@deepseek-ai/dsh/package.json'),
     }),
-    sourcePatch: path.join(packageRoot, 'dsh', 'cordis.patch.yml'),
-    targetPatch: path.join(dshHome, '.deepspider', 'cordis.patch.yml'),
-    sourcePreset: path.join(packageRoot, 'dsh', 'agent-presets', 'spider'),
-    targetPreset: path.join(dshHome, '.agent-presets', 'spider'),
-    sourceSkill: path.join(packageRoot, 'skills', 'deepspider'),
-    targetSkill: path.join(dshHome, 'skills', 'deepspider'),
-    hostPluginPath: path.join(packageRoot, 'src', 'dsh', 'host-plugin.js'),
-    agentPluginPath: path.join(packageRoot, 'src', 'dsh', 'agent-plugin.js'),
+    profileName,
+    profileDir,
+    profileManifest: path.join(profileDir, 'package.json'),
+    profilePackageRoot: path.join(profileDir, 'node_modules', bundleName),
+    bundlePatch: path.join(packageRoot, 'dsh', 'cordis.patch.yml'),
+    bundlePreset: path.join(packageRoot, 'dsh', 'agent-presets', 'spider'),
+    bundleSkills: path.join(packageRoot, 'skills'),
+    bundleSpec: `link:${path.resolve(packageRoot)}`,
   }
 }
 
-function replaceDirectory(source, target) {
-  fs.rmSync(target, { recursive: true, force: true })
-  fs.mkdirSync(path.dirname(target), { recursive: true })
-  fs.cpSync(source, target, { recursive: true })
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, 'utf8'))
 }
 
-function materializePluginPath(source, target, placeholder, pluginPath) {
-  const template = fs.readFileSync(source, 'utf8')
-  if (!template.includes(placeholder)) throw new Error(`${source} does not contain ${placeholder}`)
-  fs.mkdirSync(path.dirname(target), { recursive: true })
-  fs.writeFileSync(target, template.replace(placeholder, JSON.stringify(pluginPath)))
+export function isDshBundleInstalled(layout) {
+  try {
+    const profile = readJson(layout.profileManifest)
+    const bundles = profile.dsh?.profile?.bundles
+    if (!Array.isArray(bundles) || !bundles.includes(bundleName)) return false
+    if (typeof profile.dependencies?.[bundleName] !== 'string') return false
+    const installed = readJson(path.join(layout.profilePackageRoot, 'package.json'))
+    return installed.name === bundleName
+      && fs.realpathSync(layout.profilePackageRoot) === fs.realpathSync(layout.packageRoot)
+  } catch {
+    return false
+  }
 }
 
-export function syncManagedDshAssets(layout) {
-  replaceDirectory(layout.sourcePreset, layout.targetPreset)
-  replaceDirectory(layout.sourceSkill, layout.targetSkill)
-  materializePluginPath(
-    layout.sourcePatch,
-    layout.targetPatch,
-    '!!js process.env.DEEPSPIDER_HOST_PLUGIN_PATH',
-    layout.hostPluginPath
+export function ensureDshBundle(layout, { spawnSyncImpl = spawnSync } = {}) {
+  if (isDshBundleInstalled(layout)) return false
+
+  const result = spawnSyncImpl(
+    process.execPath,
+    [
+      layout.dshBinary,
+      'plugin',
+      '--profile',
+      layout.profileName,
+      'add',
+      layout.bundleSpec,
+    ],
+    {
+      cwd: layout.packageRoot,
+      env: { ...process.env, ...layout.env, DSH_HOME: layout.dshHome },
+      stdio: 'inherit',
+      shell: false,
+    },
   )
-  materializePluginPath(
-    path.join(layout.sourcePreset, 'agent.cordis.yml'),
-    path.join(layout.targetPreset, 'agent.cordis.yml'),
-    '!!js process.env.DEEPSPIDER_AGENT_PLUGIN_PATH',
-    layout.agentPluginPath
-  )
+  if (result.error) throw result.error
+  if (result.status !== 0) {
+    throw new Error(`Failed to install DeepSpider DSH bundle (exit ${result.status ?? 'unknown'})`)
+  }
+  if (!isDshBundleInstalled(layout)) {
+    throw new Error('DeepSpider DSH bundle installation completed without activating the web profile layer')
+  }
+  return true
 }
 
 export function buildDshLaunch({
@@ -71,7 +93,7 @@ export function buildDshLaunch({
   env = process.env,
 } = {}) {
   const layout = resolveDshLayout({ packageRoot, env })
-  const args = [layout.dshBinary, 'web', '--patch', layout.targetPatch]
+  const args = [layout.dshBinary, 'web']
   if (port !== undefined) args.push('--port', String(port))
   return {
     command: process.execPath,
@@ -80,6 +102,7 @@ export function buildDshLaunch({
       shell: false,
       stdio: 'inherit',
       env: {
+        ...process.env,
         ...env,
         DSH_PERMISSION_MODE: env.DSH_PERMISSION_MODE || 'danger-full-access',
       },
@@ -99,10 +122,11 @@ export function startDshAgent(options = {}) {
     signal,
     verbose = false,
     log = console.error,
+    bundleInstaller = ensureDshBundle,
     ...launchOptions
   } = options
   const launch = buildDshLaunch(launchOptions)
-  syncManagedDshAssets(launch.layout)
+  bundleInstaller(launch.layout)
   if (verbose) {
     const portLabel = launchOptions.port === undefined ? '' : ` on port ${launchOptions.port}`
     log(`[DeepSpider] starting DSH Web${portLabel}`)

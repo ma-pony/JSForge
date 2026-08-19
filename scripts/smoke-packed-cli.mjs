@@ -203,30 +203,34 @@ try {
   const launcher = await import(pathToFileURL(path.join(installedPackageRoot, 'src', 'dsh', 'launcher.js')))
   const dshHome = path.join(tempRoot, 'dsh-home')
   const layout = launcher.resolveDshLayout({ env: { DSH_HOME: dshHome } })
-  launcher.syncManagedDshAssets(layout)
+  assert.equal(launcher.ensureDshBundle(layout), true)
+  assert.equal(launcher.isDshBundleInstalled(layout), true)
 
   for (const requiredPath of [
     layout.dshBinary,
-    layout.sourcePatch,
-    layout.targetPatch,
-    path.join(layout.sourcePreset, 'agent.cordis.yml'),
-    layout.agentPluginPath,
-    layout.hostPluginPath,
-    path.join(layout.sourceSkill, 'SKILL.md'),
-    path.join(layout.targetPreset, 'agent.cordis.yml'),
-    path.join(layout.targetSkill, 'SKILL.md'),
+    layout.bundlePatch,
+    path.join(layout.bundlePreset, 'agent.cordis.yml'),
+    path.join(layout.bundleSkills, 'deepspider', 'SKILL.md'),
+    path.join(installedPackageRoot, 'src', 'dsh', 'agent-plugin.js'),
+    path.join(installedPackageRoot, 'src', 'dsh', 'host-plugin.js'),
+    path.join(installedPackageRoot, 'src', 'dsh', 'preset-plugin.js'),
+    layout.profileManifest,
+    layout.profilePackageRoot,
   ]) {
     assert.equal(fs.existsSync(requiredPath), true, `missing packed path: ${requiredPath}`)
     assert.equal(requiredPath.startsWith(projectRoot), false, `packed path escaped to checkout: ${requiredPath}`)
   }
   assert.equal(layout.dshBinary.includes(`${path.sep}.bin${path.sep}`), false)
-  const managedPatch = fs.readFileSync(layout.targetPatch, 'utf8')
-  const managedPreset = fs.readFileSync(path.join(layout.targetPreset, 'agent.cordis.yml'), 'utf8')
-  assert.doesNotMatch(managedPatch, /DEEPSPIDER_HOST_PLUGIN_PATH/)
-  assert.doesNotMatch(managedPreset, /DEEPSPIDER_AGENT_PLUGIN_PATH/)
-  assert.match(managedPreset, /disabled: !!js process\.platform/)
-  assert.equal(managedPatch.includes(JSON.stringify(layout.hostPluginPath)), true)
-  assert.equal(managedPreset.includes(JSON.stringify(layout.agentPluginPath)), true)
+  const bundlePatch = fs.readFileSync(layout.bundlePatch, 'utf8')
+  const bundlePreset = fs.readFileSync(path.join(layout.bundlePreset, 'agent.cordis.yml'), 'utf8')
+  const profileManifest = JSON.parse(fs.readFileSync(layout.profileManifest, 'utf8'))
+  assert.doesNotMatch(bundlePatch, /DEEPSPIDER_HOST_PLUGIN_PATH/)
+  assert.doesNotMatch(bundlePreset, /DEEPSPIDER_AGENT_PLUGIN_PATH/)
+  assert.match(bundlePatch, /name: deepspider/)
+  assert.match(bundlePreset, /name: deepspider\/agent-plugin/)
+  assert.match(bundlePreset, /disabled: !!js process\.platform/)
+  assert.ok(profileManifest.dsh.profile.bundles.includes('deepspider'))
+  assert.equal(fs.realpathSync(layout.profilePackageRoot), fs.realpathSync(installedPackageRoot))
   await smokeInstalledSemanticRuntime(installedPackageRoot)
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })

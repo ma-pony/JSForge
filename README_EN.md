@@ -18,6 +18,13 @@ npm install -g deepspider
 deepspider agent
 ```
 
+`deepspider` is also published as a native DSH Bundle. The primary command mounts it into the `web` Profile through the DSH Profile manager; an existing DSH installation can add it directly:
+
+```bash
+dsh plugin --profile web add deepspider
+dsh web
+```
+
 This is the primary start command. DSH Web loads the Spider Preset. Create a Session and describe the target URL, trigger path, and target output. The first-release automatic semantic recovery supports Cookie only. Header, Query, Body, return-value, and navigation remain browser evidence, Output Contract, and manual analysis targets; the high-level tool does not currently produce an automatic `reproduced` result or Solver for them. Multiple Sessions can run concurrently with isolated browsers, SessionArtifactStores, Workers, and artifact roots.
 
 `Ctrl+C` closes DSH Web and waits for every Session-owned Patchright Chromium process, sdenv Worker, and runtime resource to exit.
@@ -195,7 +202,7 @@ The Host Plane owns application services and multiple Sessions. An Agent Plane p
 
 ## Development and release checks
 
-Source development uses Node.js `>=24.15.0` and pnpm `11.21.0`.
+Source development uses Node.js `>=24.15.0` and pnpm `11.22.0`.
 
 ```bash
 git clone https://github.com/ma-pony/deepspider.git

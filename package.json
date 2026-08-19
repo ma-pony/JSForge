@@ -3,8 +3,21 @@
   "version": "1.0.0",
   "description": "AI-native web scraping and JavaScript reverse-engineering platform powered by DSH, Patchright/CDP, semantic recovery, and verifiable Solvers",
   "type": "module",
-  "packageManager": "pnpm@11.21.0",
-  "main": "src/mcp/server.js",
+  "packageManager": "pnpm@11.22.0",
+  "main": "src/dsh/host-plugin.js",
+  "exports": {
+    ".": "./src/dsh/host-plugin.js",
+    "./agent-plugin": "./src/dsh/agent-plugin.js",
+    "./preset-plugin": "./src/dsh/preset-plugin.js",
+    "./mcp": "./src/mcp/server.js",
+    "./cordis.patch.yml": "./dsh/cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./dsh/cordis.patch.yml"
+    }
+  },
   "files": [
     "bin/",
     "src/",
@@ -39,7 +52,9 @@
     "deobfuscation",
     "captcha",
     "anti-detect",
-    "automation"
+    "automation",
+    "dsh",
+    "dsh-plugin"
   ],
   "author": "pony-ma",
   "license": "MIT",

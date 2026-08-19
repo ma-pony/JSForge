@@ -18,6 +18,13 @@ npm install -g deepspider
 deepspider agent
 ```
 
+`deepspider` 同时发布为原生 DSH Bundle。主启动命令会通过 DSH Profile 管理器将它挂载到 `web` Profile；已有 DSH 环境也可以直接安装：
+
+```bash
+dsh plugin --profile web add deepspider
+dsh web
+```
+
 这是主启动命令。DSH Web 会加载 Spider Preset；新建一个 Session，说明目标 URL、触发路径和目标输出。首版自动语义恢复只支持 Cookie。Header、Query、Body、返回值和导航仍可作为浏览器证据、Output Contract 和手工分析目标，但当前不会由高层工具自动生成 `reproduced` 结果或 Solver。多个 Session 可以同时运行，各自持有独立浏览器、SessionArtifactStore、Worker 和产物目录。
 
 `Ctrl+C` 会关闭 DSH Web，并等待所有 Session 的 Patchright Chromium、sdenv Worker 和运行资源退出。
@@ -195,7 +202,7 @@ Host Plane 管理应用级服务和多个 Session；Agent Plane 在单个 Sessio
 
 ## 开发与发布验证
 
-源码开发使用 Node.js `>=24.15.0` 和 pnpm `11.21.0`。
+源码开发使用 Node.js `>=24.15.0` 和 pnpm `11.22.0`。
 
 ```bash
 git clone https://github.com/ma-pony/deepspider.git

@@ -30,6 +30,9 @@
 
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - !!js dshHomePath('profiles/web/node_modules/deepspider/skills')
 
 - id: tool-skill
   name: '@deepseek-ai/dsh-tool-skill'
@@ -80,4 +83,4 @@
     mode: code
 
 - id: deepspider-agent
-  name: !!js process.env.DEEPSPIDER_AGENT_PLUGIN_PATH
+  name: deepspider/agent-plugin

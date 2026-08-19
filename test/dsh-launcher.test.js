@@ -9,10 +9,11 @@ import { fileURLToPath } from 'node:url'
 
 import {
   buildDshLaunch,
+  ensureDshBundle,
+  isDshBundleInstalled,
   resolveDshBinary,
   resolveDshLayout,
   startDshAgent,
-  syncManagedDshAssets,
 } from '../src/dsh/launcher.js'
 
 const projectRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -25,14 +26,19 @@ function makeInstalledPackage() {
   fs.mkdirSync(path.join(packageRoot, 'skills', 'deepspider'), { recursive: true })
   fs.mkdirSync(path.join(packageRoot, 'src', 'dsh'), { recursive: true })
   fs.mkdirSync(path.join(dshPackageRoot, 'lib'), { recursive: true })
-  fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'deepspider', type: 'module' }))
+  fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({
+    name: 'deepspider',
+    type: 'module',
+    packageManager: 'pnpm@11.22.0',
+    dsh: { bundle: { patch: './dsh/cordis.patch.yml' } },
+  }))
   fs.writeFileSync(
     path.join(packageRoot, 'dsh', 'cordis.patch.yml'),
-    '- insert:\n    - id: deepspider-host\n      name: !!js process.env.DEEPSPIDER_HOST_PLUGIN_PATH\n'
+    '- insert:\n    - id: deepspider-host\n      name: deepspider\n'
   )
   fs.writeFileSync(
     path.join(packageRoot, 'dsh', 'agent-presets', 'spider', 'agent.cordis.yml'),
-    "- id: tool-bash\n  name: '@deepseek-ai/dsh-tool-bash'\n  disabled: !!js process.platform === 'win32'\n\n- id: deepspider-agent\n  name: !!js process.env.DEEPSPIDER_AGENT_PLUGIN_PATH\n"
+    "- id: tool-bash\n  name: '@deepseek-ai/dsh-tool-bash'\n  disabled: !!js process.platform === 'win32'\n\n- id: deepspider-agent\n  name: deepspider/agent-plugin\n"
   )
   fs.writeFileSync(path.join(packageRoot, 'dsh', 'agent-presets', 'spider', 'preset.yml'), 'name: Spider\n')
   fs.writeFileSync(path.join(packageRoot, 'skills', 'deepspider', 'SKILL.md'), '# DeepSpider\n')
@@ -71,58 +77,67 @@ test('resolveDshBinary rejects a manifest without bin.dsh', () => {
   }
 })
 
-test('installed layout uses package-root assets and DSH_HOME managed targets', () => {
+test('installed layout uses one web Profile bundle and package-owned assets', () => {
   const fixture = makeInstalledPackage()
   const dshHome = path.join(fixture.tempRoot, 'dsh-home')
   try {
     const layout = resolveDshLayout({ packageRoot: fixture.packageRoot, env: { DSH_HOME: dshHome } })
-    assert.equal(layout.sourcePatch, path.join(fixture.packageRoot, 'dsh', 'cordis.patch.yml'))
-    assert.equal(layout.targetPatch, path.join(dshHome, '.deepspider', 'cordis.patch.yml'))
-    assert.equal(layout.sourcePreset, path.join(fixture.packageRoot, 'dsh', 'agent-presets', 'spider'))
-    assert.equal(layout.targetPreset, path.join(dshHome, '.agent-presets', 'spider'))
-    assert.equal(layout.sourceSkill, path.join(fixture.packageRoot, 'skills', 'deepspider'))
-    assert.equal(layout.targetSkill, path.join(dshHome, 'skills', 'deepspider'))
-    assert.equal(layout.hostPluginPath, path.join(fixture.packageRoot, 'src', 'dsh', 'host-plugin.js'))
-    assert.equal(layout.agentPluginPath, path.join(fixture.packageRoot, 'src', 'dsh', 'agent-plugin.js'))
+    assert.equal(layout.profileName, 'web')
+    assert.equal(layout.profileDir, path.join(dshHome, 'profiles', 'web'))
+    assert.equal(layout.profileManifest, path.join(dshHome, 'profiles', 'web', 'package.json'))
+    assert.equal(layout.profilePackageRoot, path.join(dshHome, 'profiles', 'web', 'node_modules', 'deepspider'))
+    assert.equal(layout.bundlePatch, path.join(fixture.packageRoot, 'dsh', 'cordis.patch.yml'))
+    assert.equal(layout.bundlePreset, path.join(fixture.packageRoot, 'dsh', 'agent-presets', 'spider'))
+    assert.equal(layout.bundleSkills, path.join(fixture.packageRoot, 'skills'))
+    assert.equal(layout.bundleSpec, `link:${fixture.packageRoot}`)
   } finally {
     fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
   }
 })
 
-test('asset sync exactly replaces managed directories and preserves unrelated DSH_HOME state', () => {
+test('bundle install delegates once to the DSH Profile manager with the inherited environment', () => {
   const fixture = makeInstalledPackage()
   const dshHome = path.join(fixture.tempRoot, 'dsh-home')
   const layout = resolveDshLayout({ packageRoot: fixture.packageRoot, env: { DSH_HOME: dshHome } })
   try {
-    fs.mkdirSync(layout.targetPreset, { recursive: true })
-    fs.mkdirSync(layout.targetSkill, { recursive: true })
-    fs.mkdirSync(path.join(dshHome, 'profiles', 'custom'), { recursive: true })
-    fs.writeFileSync(path.join(layout.targetPreset, 'stale.yml'), 'stale')
-    fs.writeFileSync(path.join(layout.targetSkill, 'stale.md'), 'stale')
-    fs.writeFileSync(path.join(dshHome, 'profiles', 'custom', 'keep.yml'), 'keep')
-    fs.writeFileSync(path.join(dshHome, 'credentials.json'), 'keep')
+    const calls = []
+    const installed = ensureDshBundle(layout, {
+      spawnSyncImpl(command, args, options) {
+        calls.push({ command, args, options })
+        fs.mkdirSync(path.dirname(layout.profilePackageRoot), { recursive: true })
+        fs.writeFileSync(layout.profileManifest, JSON.stringify({
+          name: 'dsh-profile-web',
+          dependencies: { deepspider: layout.bundleSpec },
+          dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'deepspider'] } },
+        }))
+        fs.symlinkSync(layout.packageRoot, layout.profilePackageRoot, 'junction')
+        return { status: 0 }
+      },
+    })
 
-    syncManagedDshAssets(layout)
-
-    assert.equal(fs.existsSync(path.join(layout.targetPreset, 'stale.yml')), false)
-    assert.equal(fs.existsSync(path.join(layout.targetSkill, 'stale.md')), false)
-    const managedPatch = fs.readFileSync(layout.targetPatch, 'utf8')
-    const managedPreset = fs.readFileSync(path.join(layout.targetPreset, 'agent.cordis.yml'), 'utf8')
-    assert.equal(managedPatch.includes('DEEPSPIDER_HOST_PLUGIN_PATH'), false)
-    assert.equal(managedPreset.includes('DEEPSPIDER_AGENT_PLUGIN_PATH'), false)
-    assert.equal(managedPreset.includes("disabled: !!js process.platform === 'win32'"), true)
-    assert.equal(managedPatch.includes(JSON.stringify(layout.hostPluginPath)), true)
-    assert.equal(managedPreset.includes(JSON.stringify(layout.agentPluginPath)), true)
-    assert.equal(fs.readFileSync(path.join(layout.targetPreset, 'preset.yml'), 'utf8'), 'name: Spider\n')
-    assert.equal(fs.readFileSync(path.join(layout.targetSkill, 'SKILL.md'), 'utf8'), '# DeepSpider\n')
-    assert.equal(fs.readFileSync(path.join(dshHome, 'profiles', 'custom', 'keep.yml'), 'utf8'), 'keep')
-    assert.equal(fs.readFileSync(path.join(dshHome, 'credentials.json'), 'utf8'), 'keep')
+    assert.equal(installed, true)
+    assert.equal(isDshBundleInstalled(layout), true)
+    assert.equal(ensureDshBundle(layout), false)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].command, process.execPath)
+    assert.deepEqual(calls[0].args, [
+      layout.dshBinary,
+      'plugin',
+      '--profile',
+      'web',
+      'add',
+      layout.bundleSpec,
+    ])
+    assert.equal(calls[0].options.env.DSH_HOME, dshHome)
+    assert.equal(calls[0].options.env.PATH, process.env.PATH)
+    assert.equal(fs.existsSync(path.join(dshHome, '.agent-presets')), false)
+    assert.equal(fs.existsSync(path.join(dshHome, 'skills')), false)
   } finally {
     fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
   }
 })
 
-test('launch spec uses managed patch argv, inherited stdio, and YOLO without forwarding verbose', () => {
+test('launch spec uses the web Profile, inherited stdio, and YOLO without forwarding verbose', () => {
   const fixture = makeInstalledPackage()
   const dshHome = path.join(fixture.tempRoot, 'dsh-home')
   try {
@@ -136,8 +151,6 @@ test('launch spec uses managed patch argv, inherited stdio, and YOLO without for
     assert.deepEqual(launch.args, [
       fs.realpathSync(path.join(fixture.dshPackageRoot, 'lib', 'bin.js')),
       'web',
-      '--patch',
-      path.join(dshHome, '.deepspider', 'cordis.patch.yml'),
       '--port',
       '0',
     ])
@@ -158,7 +171,7 @@ test('launch spec preserves explicit permission mode and omits optional argv', (
       packageRoot: fixture.packageRoot,
       env: { DSH_HOME: path.join(fixture.tempRoot, 'home'), DSH_PERMISSION_MODE: 'read-only' },
     })
-    assert.deepEqual(launch.args.slice(-3), ['web', '--patch', path.join(fixture.tempRoot, 'home', '.deepspider', 'cordis.patch.yml')])
+    assert.deepEqual(launch.args.slice(-1), ['web'])
     assert.equal(launch.options.env.DSH_PERMISSION_MODE, 'read-only')
   } finally {
     fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
@@ -176,6 +189,7 @@ test('verbose logs one DeepSpider startup line without changing DSH argv', async
       port: 0,
       verbose: true,
       log: (message) => messages.push(message),
+      bundleInstaller: () => {},
       spawnImpl: () => child,
     })
     assert.equal(messages.length, 1)
@@ -194,6 +208,7 @@ test('start propagates spawn errors and non-zero child exits', async () => {
     const failedStart = startDshAgent({
       packageRoot: fixture.packageRoot,
       env: { DSH_HOME: path.join(fixture.tempRoot, 'error-home') },
+      bundleInstaller: () => {},
       spawnImpl: () => spawnErrorChild,
     })
     const spawnError = new Error('spawn failed')
@@ -204,6 +219,7 @@ test('start propagates spawn errors and non-zero child exits', async () => {
     const exited = startDshAgent({
       packageRoot: fixture.packageRoot,
       env: { DSH_HOME: path.join(fixture.tempRoot, 'exit-home') },
+      bundleInstaller: () => {},
       spawnImpl: () => exitedChild,
     })
     exitedChild.emit('exit', 17, null)
@@ -222,6 +238,7 @@ test('close is idempotent and AbortSignal drives one SIGTERM shutdown', async ()
       packageRoot: fixture.packageRoot,
       env: { DSH_HOME: path.join(fixture.tempRoot, 'signal-home') },
       signal: abortController.signal,
+      bundleInstaller: () => {},
       spawnImpl: () => child,
     })
     abortController.abort('test shutdown')

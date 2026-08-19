@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-import { resolveDshLayout, syncManagedDshAssets } from '../src/dsh/launcher.js'
+import { ensureDshBundle, resolveDshLayout } from '../src/dsh/launcher.js'
 
 const projectRoot = fileURLToPath(new URL('..', import.meta.url))
 const dshPackageJsonPath = createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')
@@ -87,7 +87,7 @@ test('both READMEs retain the full native DSH product contract', () => {
       /Cordis/,
       /Patchright Chromium/,
       /Node\.js `>=24\.15\.0`/,
-      /pnpm `11\.21\.0`/,
+      /pnpm `11\.22\.0`/,
       /Ctrl\+C/,
       /MCP.*(?:外部适配器|stdio 适配器)/,
     ],
@@ -99,7 +99,7 @@ test('both READMEs retain the full native DSH product contract', () => {
       /Cordis/,
       /Patchright Chromium/,
       /Node\.js `>=24\.15\.0`/,
-      /pnpm `11\.21\.0`/,
+      /pnpm `11\.22\.0`/,
       /Ctrl\+C/,
       /MCP.*(?:external adapter|stdio adapter)/,
     ],
@@ -159,7 +159,8 @@ test('Spider Preset exposes only the approved general and DeepSpider capabilitie
   })
   assert.deepEqual(byId.get('tool-presentation').config, { mode: 'code' })
   assert.equal(byId.get('tool-cordis').name, '@deepseek-ai/dsh-tool-cordis')
-  assert.equal(byId.get('deepspider-agent').name, 'process.env.DEEPSPIDER_AGENT_PLUGIN_PATH')
+  assert.equal(byId.get('deepspider-agent').name, 'deepspider/agent-plugin')
+  assert.match(byId.get('skill-filesystem').config.customSkillDirs[0], /profiles\/web\/node_modules\/deepspider\/skills/)
 
   const forbidden = /plan|subagent|workflow|ralph|evolve/i
   assert.deepEqual(
@@ -172,14 +173,25 @@ test('package patch mounts the Host plugin and selects the spider Preset', () =>
   const patchRows = loadYaml(path.join(projectRoot, 'dsh', 'cordis.patch.yml'))
   assert.deepEqual(patchRows, [
     {
-      insert: [{
-        id: 'deepspider-host',
-        name: 'process.env.DEEPSPIDER_HOST_PLUGIN_PATH',
-      }],
+      insert: [
+        {
+          id: 'deepspider-host',
+          name: 'deepspider',
+        },
+        {
+          id: 'deepspider-preset',
+          name: 'deepspider/preset-plugin',
+          config: {
+            presetRoot: "dshHomePath('.agent-presets')",
+          },
+        },
+      ],
     },
     {
       id: 'agent-presets',
-      config: { default: 'spider' },
+      config: {
+        default: 'spider',
+      },
     },
   ])
 })
@@ -204,18 +216,16 @@ test('release surface contains only the active environment and Dialog architectu
   assert.equal(fs.existsSync(path.join(projectRoot, 'src/browser/ui/analysisPanel.js')), true)
 })
 
-test('real DSH loader consumes the materialized managed patch without losing Web services', () => {
+test('real DSH loader consumes the installed DeepSpider bundle without losing Web services', () => {
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'deepspider-dsh-composition-'))
   const dshPackage = JSON.parse(fs.readFileSync(dshPackageJsonPath, 'utf8'))
   const dshBinary = path.resolve(path.dirname(dshPackageJsonPath), dshPackage.bin.dsh)
-  const hostPluginPath = path.join(projectRoot, 'src', 'dsh', 'host-plugin.js')
-
   try {
     const layout = resolveDshLayout({ env: { DSH_HOME: tempHome } })
-    syncManagedDshAssets(layout)
+    ensureDshBundle(layout)
     const dumped = execFileSync(
       process.execPath,
-      [dshBinary, 'web', '--patch', layout.targetPatch, '--dump-config'],
+      [dshBinary, 'web', '--dump-config'],
       {
         cwd: projectRoot,
         encoding: 'utf8',
@@ -228,8 +238,10 @@ test('real DSH loader consumes the materialized managed patch without losing Web
     const rows = yaml.load(dumped, { schema: makeSchema() })
     const byId = new Map(rows.map((row) => [row.id, row]))
 
-    assert.equal(byId.get('deepspider-host').name, hostPluginPath)
+    assert.equal(byId.get('deepspider-host').name, 'deepspider')
+    assert.equal(byId.get('deepspider-preset').name, 'deepspider/preset-plugin')
     assert.equal(byId.get('agent-presets').config.default, 'spider')
+    assert.equal(byId.get('agent-presets').config.roots, undefined)
     assert.equal(byId.get('code-runtime').name, '@deepseek-ai/dsh-code-runtime-worker-thread')
     assert.equal(byId.get('session-persistence-jsonl').name, '@deepseek-ai/dsh-session-persistence-jsonl')
     assert.equal(byId.get('goal').name, '@deepseek-ai/dsh-goal')

@@ -1,6 +1,10 @@
 - insert:
     - id: deepspider-host
-      name: !!js process.env.DEEPSPIDER_HOST_PLUGIN_PATH
+      name: deepspider
+    - id: deepspider-preset
+      name: deepspider/preset-plugin
+      config:
+        presetRoot: !!js dshHomePath('.agent-presets')
 
 - id: agent-presets
   config:
