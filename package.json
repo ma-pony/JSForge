@@ -1,6 +1,6 @@
 {
   "name": "deepspider",
-  "version": "1.0.0-beta",
+  "version": "1.0.0",
   "description": "DSH-native JavaScript reverse-engineering platform with browser evidence and offline verification",
   "type": "module",
   "packageManager": "pnpm@11.21.0",

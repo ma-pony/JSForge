@@ -196,7 +196,7 @@ try {
   const version = execFileSync(process.execPath, [cliPath, '--version'], { encoding: 'utf8' })
   const help = execFileSync(process.execPath, [cliPath, '--help'], { encoding: 'utf8' })
   const agentHelp = execFileSync(process.execPath, [cliPath, 'agent', '--help'], { encoding: 'utf8' })
-  assert.match(version, /1\.0\.0-beta/)
+  assert.match(version, /^deepspider v1\.0\.0\s*$/)
   assert.match(help, /deepspider agent/)
   assert.match(agentHelp, /DSH Web/)
 
