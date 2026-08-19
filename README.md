@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/deepspider.svg)](https://www.npmjs.com/package/deepspider)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> AI 原生的 JavaScript 逆向工程平台——从真实请求证据出发，定位参数生成链路，并交付可直接请求的实现与可运行 Solver。
+> AI 原生的智能爬虫与 JavaScript 逆向工程平台——基于 DSH、Patchright/CDP 与独立语义运行时，从浏览器证据恢复参数生成逻辑，并交付经过真实请求验证的可运行 Solver。
 
 DeepSpider 将 DSH Web、Patchright Chromium、Chrome DevTools Protocol（CDP）和独立 Node 语义运行时组合成一套逆向工作台。浏览器负责采集请求、脚本与运行时事实；最终结果必须由非浏览器运行时重新生成，并通过真实请求验证，而不是停留在页面自动化或一次抓取结果。
 

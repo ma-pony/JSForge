@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/deepspider.svg)](https://www.npmjs.com/package/deepspider)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> An AI-native JavaScript reverse-engineering platform—from real request evidence to recovered parameter-generation logic, direct requests, and runnable Solvers.
+> An AI-native web scraping and JavaScript reverse-engineering platform powered by DSH, Patchright/CDP, and an independent semantic runtime—from browser evidence to recovered parameter-generation logic and runnable Solvers verified against real requests.
 
 DeepSpider combines DSH Web, Patchright Chromium, Chrome DevTools Protocol (CDP), and an independent Node semantic runtime. The browser collects requests, scripts, and runtime facts. A finished result must be generated again outside the browser and accepted by a real request; page automation or a one-off capture is not the deliverable.
 

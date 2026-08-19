@@ -1,7 +1,7 @@
 {
   "name": "deepspider",
   "version": "1.0.0",
-  "description": "DSH-native JavaScript reverse-engineering platform with browser evidence and offline verification",
+  "description": "AI-native web scraping and JavaScript reverse-engineering platform powered by DSH, Patchright/CDP, semantic recovery, and verifiable Solvers",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "main": "src/mcp/server.js",

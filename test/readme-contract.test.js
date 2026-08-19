@@ -51,7 +51,9 @@ test('repository guidance describes the same live architecture', () => {
 })
 
 test('package metadata identifies the current product and runtime floor', () => {
-  assert.match(packageJson.description, /DSH-native JavaScript reverse-engineering/i)
+  assert.match(packageJson.description, /web scraping/i)
+  assert.match(packageJson.description, /JavaScript reverse-engineering/i)
+  assert.match(packageJson.description, /\bDSH\b/)
   assert.equal(packageJson.engines.node, '>=24.15.0')
   assert.equal(packageJson.packageManager, 'pnpm@11.21.0')
 })
