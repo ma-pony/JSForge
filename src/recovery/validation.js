@@ -1,10 +1,8 @@
 import initCycleTLS from 'cycletls'
 
-const BLOCKED_HEADERS = new Set([
-  'cookie', 'host', 'connection', 'content-length', 'accept-encoding', 'user-agent',
-])
-const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
-const COOKIE_VALUE = /^[\x21-\x3A\x3C-\x7E]*$/
+import { cookieOutputAdapter } from './output-adapters/cookie.js'
+
+const SUPPORTED_SUCCESS_CONDITIONS = new Set(['status', 'title'])
 
 let cycleTlsInitialization = Promise.resolve()
 let cycleTlsPort = 9119
@@ -27,27 +25,7 @@ function titleOf(html) {
   return match?.[1]?.replace(/\s+/g, ' ').trim() || ''
 }
 
-function requestHeaders(headers) {
-  return Object.fromEntries(
-    Object.entries(headers || {}).filter(([name]) => !BLOCKED_HEADERS.has(name.toLowerCase())),
-  )
-}
-
-function outputIds(outputs) {
-  return outputs.map((output) => output.artifactId || output.id).filter(Boolean)
-}
-
-function legalCookies(outputs) {
-  return outputs.filter((output) => (
-    output?.kind === 'cookie'
-    && typeof output.name === 'string'
-    && COOKIE_NAME.test(output.name)
-    && typeof output.value === 'string'
-    && COOKIE_VALUE.test(output.value)
-  ))
-}
-
-function baseResult(contract, outputs, cookies = legalCookies(outputs)) {
+function baseResult(contract, prepared) {
   return {
     level: 'observed',
     accepted: false,
@@ -55,9 +33,9 @@ function baseResult(contract, outputs, cookies = legalCookies(outputs)) {
     expectedStatus: contract.success.status ?? null,
     title: null,
     expectedTitle: contract.success.title ?? null,
-    outputArtifactIds: outputIds(outputs),
-    generatedCookieCount: cookies.length,
-    generatedCookieNames: cookies.map(({ name }) => name),
+    outputArtifactIds: prepared.outputArtifactIds,
+    generatedOutputCount: prepared.generatedOutputCount,
+    generatedOutputNames: prepared.generatedOutputNames,
   }
 }
 
@@ -113,32 +91,37 @@ function abortable(promise, signal, cleanup) {
   })
 }
 
-export async function validateGeneratedOutput({ contract, outputs, requestTemplate, signal }) {
+export async function validateGeneratedOutput({
+  contract,
+  outputs,
+  requestTemplate,
+  outputAdapter = cookieOutputAdapter,
+  signal,
+}) {
   if (!contract || typeof contract !== 'object') throw new TypeError('contract must be provided')
   if (!Array.isArray(outputs)) throw new TypeError('outputs must be an array')
   if (!requestTemplate || typeof requestTemplate !== 'object') throw new TypeError('requestTemplate must be provided')
   if (signal?.aborted) throw signal.reason
 
-  const cookies = legalCookies(outputs)
-  const result = baseResult(contract, outputs, cookies)
-  if (contract.kind !== 'cookie') {
-    return failureResult(result, {
-      kind: 'program', operation: 'validate-output-kind', path: contract.request.url,
-      reason: `Unsupported validation output kind: ${contract.kind}`, action: 'inspect-program-behavior',
-    })
+  if (!outputAdapter || typeof outputAdapter.prepare !== 'function') {
+    throw new TypeError('outputAdapter must provide prepare()')
   }
-  const anchorPresent = cookies.length > 0
-    && (!contract.selector || cookies.some((cookie) => cookie.name === contract.selector))
-  if (!anchorPresent) {
+  const prepared = outputAdapter.prepare({ contract, outputs, requestTemplate })
+  const result = baseResult(contract, prepared)
+  if (!prepared.ok) return { ...result, failure: prepared.failure }
+  const unsupportedSuccessConditions = Object.keys(contract.success || {})
+    .filter((condition) => !SUPPORTED_SUCCESS_CONDITIONS.has(condition))
+  if (unsupportedSuccessConditions.length > 0) {
     return failureResult(result, {
-      kind: 'validation', operation: 'validate-generated-cookie', path: contract.request.url,
-      reason: cookies.length === 0 ? 'no-legal-generated-cookie' : 'generated-cookie-selector-mismatch',
-      action: 'inspect-generated-output',
+      kind: 'program',
+      operation: 'validate-output-contract',
+      path: contract.request.url,
+      reason: 'unsupported-success-condition',
+      action: 'select-compatible-validator',
     })
   }
 
-  const headers = requestHeaders(requestTemplate.headers)
-  headers.Cookie = cookies.map(({ name, value }) => `${name}=${value}`).join('; ')
+  const requestOptions = prepared.request
   let client
   let initialization
   let closed = false
@@ -149,19 +132,19 @@ export async function validateGeneratedOutput({ contract, outputs, requestTempla
     await client.exit().catch(() => {})
   }
   try {
-    initialization = initializeCycleTLS({ autoExit: false, timeout: requestTemplate.timeoutMs })
+    initialization = initializeCycleTLS({ autoExit: false, timeout: requestOptions.timeoutMs })
     client = await abortable(initialization, signal, async () => {
       const lateClient = await initialization.catch(() => null)
       if (lateClient) await lateClient.exit().catch(() => {})
     })
     stage = 'request'
     const request = Promise.resolve(client(contract.request.url, {
-      headers,
-      userAgent: requestTemplate.userAgent,
+      headers: requestOptions.headers,
+      userAgent: requestOptions.userAgent,
       responseType: 'text',
       disableRedirect: true,
-      insecureSkipVerify: requestTemplate.strictSSL === false,
-      timeout: requestTemplate.timeoutMs,
+      insecureSkipVerify: requestOptions.strictSSL === false,
+      timeout: requestOptions.timeoutMs,
     }, contract.request.method.toLowerCase()))
     const response = await abortable(request, signal, closeClient)
     if (!Number.isFinite(response?.status) || response.status <= 0) {
@@ -174,7 +157,7 @@ export async function validateGeneratedOutput({ contract, outputs, requestTempla
     const title = titleOf(body)
     const statusMatches = result.expectedStatus == null || response.status === result.expectedStatus
     const titleMatches = result.expectedTitle == null || title === result.expectedTitle
-    const accepted = anchorPresent && statusMatches && titleMatches
+    const accepted = statusMatches && titleMatches
     return {
       ...result,
       level: accepted ? 'reproduced' : 'observed',

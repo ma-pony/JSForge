@@ -85,31 +85,26 @@ Captured scripts, responses, and dynamic sources are immutable `observed` Artifa
 Normal recovery uses one high-level tool:
 
 ```text
-recover_target_output({ url, outputKind, outputSelector?, mode? })
+recover_target_output({ url, outputKind: "cookie", outputSelector?, mode? })
 ```
 
-For a Cookie Contract, the tool builds the Artifact Graph, Output Contract, and Runtime Recipe; starts the Session-owned sdenv Worker; performs real-request validation; and exports a Solver. Header, Query, Body, return-value, and navigation can enter evidence and Contracts, but the high-level tool does not currently complete their independent generation or Solver export. It returns only stage status, evidence levels, strategy, the first blocker, Solver Artifact ID, and next action to the Agent. Source, Cookie values, and full diagnostics stay in private Session Artifacts.
+A capability registry composes an Evidence Selector, Engine, Output Adapter, Validator, and Exporter into an executable chain. Only output kinds with all five components are published in the tool schema. The current Cookie chain builds the Artifact Graph, Output Contract, and Runtime Recipe; starts the Session-owned sdenv Worker; validates a real request through CycleTLS; and exports a Solver. The current CycleTLS Validator supports only `status` and `title` success conditions. JSON, redirect-target, body, and other unsupported conditions return `unsupported-success-condition`; they are never ignored to claim `reproduced`. Header, Query, Body, return-value, and navigation can enter evidence and Contracts, but the high-level tool does not currently complete their independent generation or Solver export. It returns only stage status, evidence levels, strategy, the first blocker, Solver Artifact ID, and next action to the Agent. Source, Cookie values, and full diagnostics stay in private Session Artifacts.
 
 `mode: "auto"` selects the semantic runtime by default. `mode: "algorithm"` has no automatic algorithm engine yet and returns an explicit `program` blocker: `algorithm-recovery-engine-not-implemented`. The Agent can then use the existing Hook, Debugger, and Code Mode workflow to recover the local logic that affects the target output, or wait for a future algorithm engine. DeepSpider does not present this unimplemented escalation as automatic completion.
 
-## Eight-stage reverse-engineering workflow
+## Three recovery completion gates
 
 ```text
-intake → evidence → locate → recover → runtime → extraction → validation → handoff
+Define → Observe → Reproduce
 ```
 
-| Stage | Core task | Main output |
+| Gate | Required fact | Optional tactics |
 | --- | --- | --- |
-| intake | Define the request, trigger path, delivery, and output kind | Structured objective |
-| evidence | Reproduce the request on the real page and inspect the full response | Browser Oracle evidence |
-| locate | Follow the Initiator, call stack, and source to the write boundary | Parameter origin and key Artifacts |
-| recover | Recover bridge contracts and operators that affect the output | Output Contract |
-| runtime | Find the first browser/independent-runtime divergence | Runtime Recipe |
-| extraction | Use Hook, Debugger, and Code Mode to separate algorithm and environment semantics as required by the blocker | Worker result or manually recovered local algorithm |
-| validation | Send the real request with generated values | `reproduced` Validation Artifact |
-| handoff | Freeze identity, entry points, and operating instructions | Solver or direct-request module |
+| Define | The target request, output kind, business acceptance condition, and delivery are explicit | DSH questions and Output Contract |
+| Observe | The target behavior has traceable Browser Oracle or equivalent evidence | Network, Initiator, Hook, Debugger, and Artifact Graph |
+| Reproduce | An independent runtime generates the output and a real request satisfies the full Contract | Runtime Recipe, Engine, Validator, and Solver |
 
-The Coordinator makes at most three semantic attempts and stops on success. It does not modify the Runtime Recipe or handle a blocker between attempts. If all three fail, it returns the first blocker and next action; the Agent may then collect evidence or manually change the Recipe before starting a new recovery run. `environment` is a missing browser semantic, `resource` is a dependency or network-response problem, `program` is behavior the current engine cannot execute, and `validation` means an output was generated but the request rejected it.
+Locate, runtime diagnosis, algorithm extraction, and handoff are tactics selected to satisfy the missing gate, not mandatory sequential stages. Recovery Identity combines the selected evidence content hash, Output Contract hash, Runtime Recipe hash, and complete Capability IDs. When the Recovery Identity is unchanged, the Coordinator makes exactly one attempt and stores its successful or failed terminal outcome as an Artifact that is reused across calls; repeating the same Recipe cannot resolve the same blocker. Another recovery is allowed only after the selected evidence, Contract, Recipe, or an executable capability changes. `environment` is a missing browser semantic, `resource` is a dependency or network-response problem, `program` is behavior the current engine cannot execute, and `validation` means an output was generated but the request rejected it.
 
 ## DSH Agent and Dialog
 
@@ -192,6 +187,8 @@ DSH Web Host Plane
         ├── Patchright Chromium + CDP + Dialog
         ├── Browser Oracle + SessionArtifactStore
         ├── Session Artifact Graph + RecoveryCoordinator
+        ├── Recovery Capability Registry
+        │   └── Evidence Selector + Engine + Output Adapter + Validator + Exporter
         └── sdenv Worker + CycleTLS Validator + Solver
 
 MCP stdio adapter

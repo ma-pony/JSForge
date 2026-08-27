@@ -113,3 +113,69 @@ test('Cookie validation requires at least one legal generated Cookie and selecto
     assert.equal(result.failure?.operation, 'validate-generated-cookie')
   }
 })
+
+test('request validation delegates output-specific preparation to the selected adapter', { timeout: 10000 }, async (t) => {
+  const server = http.createServer((request, response) => {
+    const accepted = request.headers['x-generated'] === 'fixture-value'
+    response.writeHead(accepted ? 200 : 412, { 'content-type': 'text/html' })
+    response.end(`<title>${accepted ? 'Accepted' : 'Challenge'}</title>`)
+  })
+  const url = await listen(server)
+  t.after(() => close(server))
+  const outputAdapter = {
+    prepare({ requestTemplate }) {
+      return {
+        ok: true,
+        outputArtifactIds: ['artifact-header'],
+        generatedOutputCount: 1,
+        generatedOutputNames: ['x-generated'],
+        request: {
+          ...requestTemplate,
+          headers: { ...requestTemplate.headers, 'X-Generated': 'fixture-value' },
+        },
+      }
+    },
+  }
+
+  const result = await validateGeneratedOutput({
+    contract: {
+      kind: 'header', selector: 'x-generated',
+      request: { method: 'GET', url }, success: { status: 200, title: 'Accepted' },
+    },
+    outputs: [{ kind: 'header', name: 'x-generated', value: 'fixture-value' }],
+    requestTemplate: requestTemplate(),
+    outputAdapter,
+  })
+
+  assert.equal(result.accepted, true)
+  assert.equal(result.level, 'reproduced')
+  assert.equal(result.generatedOutputCount, 1)
+  assert.deepEqual(result.generatedOutputNames, ['x-generated'])
+  await waitForCycleTlsExit()
+})
+
+test('CycleTLS validation rejects success conditions it cannot evaluate', { timeout: 10000 }, async (t) => {
+  let requests = 0
+  const server = http.createServer((_request, response) => {
+    requests += 1
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ code: 403, message: 'blocked' }))
+  })
+  const url = await listen(server)
+  t.after(() => close(server))
+
+  const result = await validateGeneratedOutput({
+    contract: {
+      kind: 'cookie', selector: 'clearance',
+      request: { method: 'GET', url }, success: { status: 200, json: { code: 0 } },
+    },
+    outputs: [{ kind: 'cookie', name: 'clearance', value: 'generated' }],
+    requestTemplate: requestTemplate(),
+  })
+
+  assert.equal(result.accepted, false)
+  assert.equal(result.level, 'observed')
+  assert.equal(result.failure?.operation, 'validate-output-contract')
+  assert.equal(result.failure?.reason, 'unsupported-success-condition')
+  assert.equal(requests, 0)
+})

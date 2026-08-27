@@ -1,75 +1,76 @@
-# Recover 阶段：输出驱动恢复策略
+# 输出驱动恢复策略
 
-> 阶段目标：在独立 Node 语义运行时生成目标输出，并用真实请求证明结果可用。
+目标是在独立 Node 运行时生成目标输出，并用真实请求证明结果可用。恢复路径由能力注册表选择，不依赖固定阶段编号。
 
-## 默认入口
+## 自动能力边界
 
-明确目标 URL 与输出类型后，优先调用：
+一个可执行恢复能力由 Evidence Selector、Engine、Output Adapter、Validator、Exporter 五类组件组成。只有完整能力链对应的输出类型才会发布到 `recover_target_output` 的 schema。
+
+当前默认链路是 Document challenge evidence → sdenv Engine → Cookie Output Adapter → CycleTLS Validator → sdenv Solver Exporter，因此入口是：
 
 ```text
 recover_target_output({
   url,
-  outputKind: "cookie | header | query | body | return-value | navigation",
+  outputKind: "cookie",
   outputSelector?,
   mode: "auto"
 })
 ```
 
-如果 `outputKind` 无法安全判断，先使用 DSH 原生选择题协议让用户选择，再调用工具。不要在 Skill 或 Dialog 中另建问答协议。
+Header、Query、Body、返回值和导航可以进入 Browser Oracle 证据与 Output Contract，但当前不属于高层工具的自动能力。使用通用 Network、Hook、Debugger、文件和 Code Mode 手工恢复；不要向工具传入 schema 未公布的类型。
 
-浏览器输出只属于 `observed`。工具只有在独立 Node 生成成功并通过真实请求验证后才返回 `reproduced`；这才是默认完成条件。
+Validator 必须完整实现自己接受的 Contract 条件。当前 CycleTLS Validator 只支持 `status` 和 `title`；Contract 含 JSON、跳转目标或正文等未支持条件时返回 `program` blocker `unsupported-success-condition`。不能把未知条件静默当作通过。
 
-## 结果处理
+如果输出类型无法安全判断，使用 DSH 原生选择题让用户选择。不要在 Skill 或 Dialog 中建立另一套问答协议。
 
-`recover_target_output` 只返回阶段状态、证据等级、策略、首个 blocker、Solver ID 和下一动作。源码、Cookie 值与完整 Trace 留在 Session Artifact 中。
+## 结果与证据等级
 
-按首个 blocker 处理：
+浏览器输出只属于 `observed`。捕获值回放属于 `replayed`。工具只有在独立 Node 生成成功，并且真实请求满足完整 Output Contract 后才返回 `reproduced`。
 
-| blocker | 含义 | 下一步 |
+工具只返回阶段状态、证据等级、策略、首个 blocker、Solver ID 和下一动作。源码、生成值和完整 Trace 留在 Session Artifact 中。
+
+| blocker | 含义 | 下一项最小动作 |
 |---|---|---|
-| `environment` | 独立运行时缺少或错误实现浏览器语义 | 用浏览器事实、属性采集或最小 Hook 补证据，更新当前 Session Recipe |
-| `resource` | 页面依赖未加载或真实请求失败 | 核对 Session 网络证据与资源可达性，修正 Recipe 后重试 |
-| `validation` | 已生成输出但真实请求未接受 | 核对 Output Contract、请求模板和成功条件 |
-| `program` | 当前语义引擎不能执行目标程序行为 | 用户明确同意或原本就要求纯算法时，升级算法恢复 |
+| `environment` | 独立运行时缺少或错误实现浏览器语义 | 补充最小浏览器事实，更新当前 Session Recipe |
+| `resource` | 依赖未加载或真实请求失败 | 核对网络证据、资源可达性和请求时序 |
+| `validation` | 已生成输出但业务请求未接受 | 修正 Output Contract、请求模板、业务成功条件或输出注入 |
+| `program` | 当前 Engine 不能执行目标程序行为 | 用户同意后升级 `mode: algorithm`，或实现新的 Engine 能力 |
 
-每轮只处理首个 blocker。不要把站点名称、Cookie 名或风控厂商写入底层判断；确定的站点规则放入 Runtime Recipe。
+站点名称、Cookie 名和风控厂商不能进入通用底层判断；确定的站点差异写入 Runtime Recipe。
 
-## 何时使用 Hook / Debugger
+## Recovery Identity 与重试
 
-Hook 与 Debugger 是证据补充手段，不是默认恢复主流程。仅在以下情况使用：
+Recovery Identity 由 selected evidence content hash、Output Contract hash、Runtime Recipe hash 和完整 Capability ID 组成。
 
-- 输出类型或 selector 无法从现有请求证据确认；
+- Coordinator 对未变化的 Recovery Identity 只执行一次。
+- 成功或失败的终态结果保存为 Artifact，并在后续调用中跨调用复用。
+- 相同 blocker 且身份未变化时立即停止，不重复运行同一 Recipe。
+- 只有新证据改变了 fingerprint、Contract 被修正、Recipe 被修正，或切换到实际可执行能力后，才开始下一次恢复。
+- 重试前记录发生变化的身份字段；无法指出变化时不得重试。
+
+## Hook / Debugger 的使用条件
+
+Hook 与 Debugger 是证据补充手段，仅在现有证据无法回答具体问题时使用：
+
+- selector 或输出消费点不明确；
 - `environment` blocker 缺少具体属性值、描述符或调用位置；
-- `resource` blocker 需要确认依赖的发起方、请求头或加载时序；
-- 验证失败，需要定位输出写入点与请求消费点是否一致。
+- `resource` blocker 需要确认依赖发起方、请求头或加载时序；
+- 验证失败，需要区分生成错误与注入错误。
 
-优先采集最小事实：目标函数 I/O、属性描述符、调用栈、请求发起方。不要把完整 Trace 或整份混淆源码塞进 Agent 上下文。
+优先采集目标函数 I/O、属性描述符、调用栈和请求发起方等最小事实。不要把整份混淆源码或完整 Trace 塞进 Agent 上下文。
 
-## 何时升级算法恢复
+## 算法恢复
 
-只有两种入口：
+只有两个入口：当前能力返回明确 `program` blocker，或用户明确要求纯算法/指定语言移植。`mode: algorithm` 当前会返回 `algorithm-recovery-engine-not-implemented`，不能描述成已实现的自动升级。
 
-1. 语义运行时返回明确的 `program` blocker；
-2. 用户明确要求纯算法、Python 移植或指令级还原。
-
-算法升级仍以 Output Contract 为边界，只恢复影响目标输出的局部语义。不要默认完整逆向 dispatcher，也不要为了避开逆向而交付浏览器抓取。
-
-常见算法识别线索：
-
-| 特征 | 可能算法 |
-|---|---|
-| `0x67452301` 等初始化常量 | MD5 |
-| `0x6a09e667` 等常量 | SHA-256 |
-| 256 项 S-box | AES |
-| 大整数模运算 | RSA / ECC |
-| `charCodeAt` 与 XOR | 自定义编码或流式变换 |
+算法恢复仍以 Output Contract 为边界，只处理影响目标输出的局部语义。不要默认完整逆向 dispatcher，也不要用浏览器抓取代替逆向。
 
 ## 退出条件
 
-- [ ] Browser Oracle 已形成目标请求的 `observed` 证据；
-- [ ] Artifact Graph、Output Contract 与 Runtime Recipe 属于同一 Session；
-- [ ] 独立 Node 运行时生成了目标输出；
-- [ ] 真实请求验证等级为 `reproduced`；
-- [ ] 已生成可重复运行的 Solver ID。
+- Browser Oracle 或等价事实已形成目标请求的 `observed` 证据；
+- Artifact Graph、Output Contract 与 Runtime Recipe 属于同一 Session；
+- 独立运行时生成了目标输出；
+- 真实请求满足完整业务验收条件，等级为 `reproduced`；
+- 用户需要复用产物时，已生成可重复运行的 Solver 或指定模块。
 
-若仍有 blocker，保持任务未完成并报告首个 blocker 与下一动作。
+若仍有 blocker，保持任务未完成，报告首个 blocker、当前 Recovery Identity 和下一项最小动作。

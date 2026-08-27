@@ -141,11 +141,11 @@ export async function exportSolver({ sessionId, contract, recipe, validation, so
   const safeContract = validateOutputContract(contract)
   const safeRecipe = validateRuntimeRecipe(recipe)
   if (!validation || typeof validation !== 'object') throw new TypeError('validation must be provided')
-  const validatedNames = Array.isArray(validation.generatedCookieNames) ? validation.generatedCookieNames : []
+  const validatedNames = Array.isArray(validation.generatedOutputNames) ? validation.generatedOutputNames : []
   const cookieAnchored = validation.accepted === true
     && validation.level === 'reproduced'
-    && Number.isInteger(validation.generatedCookieCount)
-    && validation.generatedCookieCount > 0
+    && Number.isInteger(validation.generatedOutputCount)
+    && validation.generatedOutputCount > 0
     && (!safeContract.selector || validatedNames.includes(safeContract.selector))
   if (!cookieAnchored) throw new TypeError('validation must be reproduced from a legal generated Cookie')
   const directory = resolve(solverDir)

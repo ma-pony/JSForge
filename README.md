@@ -85,31 +85,26 @@ Patchright Session 是重要样本，但不是浏览器环境的唯一真值。�
 正常恢复只使用高层工具：
 
 ```text
-recover_target_output({ url, outputKind, outputSelector?, mode? })
+recover_target_output({ url, outputKind: "cookie", outputSelector?, mode? })
 ```
 
-对于 Cookie Contract，工具建立 Artifact Graph、Output Contract 和 Runtime Recipe，启动 Session-owned sdenv Worker，执行真实请求验证并导出 Solver。Header、Query、Body、返回值和导航可以进入证据与 Contract，但当前高层工具不会为它们自动完成独立生成和 Solver 导出。工具只向 Agent 返回阶段状态、证据等级、策略、首个 blocker、Solver Artifact ID 和下一动作；源码、Cookie 值和完整运行日志保留在私有 Session Artifact 中。
+能力注册表将 Evidence Selector、Engine、Output Adapter、Validator 和 Exporter 组合成可执行链；只有五类组件都存在的输出类型才会发布到工具 schema。当前 Cookie 链建立 Artifact Graph、Output Contract 和 Runtime Recipe，启动 Session-owned sdenv Worker，通过 CycleTLS 执行真实请求验证并导出 Solver。当前 CycleTLS Validator 只支持 `status` 和 `title` 成功条件；遇到 JSON、跳转目标或正文等未支持条件会返回 `unsupported-success-condition`，不会忽略条件并误报 `reproduced`。Header、Query、Body、返回值和导航可以进入证据与 Contract，但当前高层工具不会为它们自动完成独立生成和 Solver 导出。工具只向 Agent 返回阶段状态、证据等级、策略、首个 blocker、Solver Artifact ID 和下一动作；源码、Cookie 值和完整运行日志保留在私有 Session Artifact 中。
 
 `mode: "auto"` 默认选择语义运行时。`mode: "algorithm"` 当前没有自动算法引擎，会返回显式 `program` blocker：`algorithm-recovery-engine-not-implemented`。随后由 Agent 使用现有 Hook、Debugger 和 Code Mode 手工恢复影响目标输出的局部逻辑，或等待后续算法引擎实现；系统不会把未实现的升级描述成自动完成。
 
-## 八阶段逆向工作流
+## 三个恢复完成门
 
 ```text
-intake → evidence → locate → recover → runtime → extraction → validation → handoff
+Define（定义） → Observe（观察） → Reproduce（复现）
 ```
 
-| 阶段 | 核心任务 | 主要产物 |
+| 完成门 | 必须成立的事实 | 可选策略 |
 | --- | --- | --- |
-| intake | 明确目标请求、触发路径和交付要求 | 结构化目标与输出类型 |
-| evidence | 在真实页面复现请求并读取完整响应 | Browser Oracle 证据 |
-| locate | 沿 Initiator、调用栈和源码定位写入边界 | 参数来源与关键 Artifact |
-| recover | 还原桥接合约和影响输出的关键算子 | Output Contract |
-| runtime | 找到浏览器与独立运行时的首次分歧 | Runtime Recipe |
-| extraction | Agent 按 blocker 使用 Hook、Debugger 与 Code Mode 分离算法和环境语义 | Worker 结果或手工局部算法实现 |
-| validation | 用生成值完成真实请求 | `reproduced` Validation Artifact |
-| handoff | 固化身份、入口和运行说明 | Solver 或直接请求模块 |
+| Define | 目标请求、输出类型、业务验收条件和交付形式明确 | DSH 选择题、Output Contract |
+| Observe | 目标行为有可追溯的 Browser Oracle 或等价事实 | Network、Initiator、Hook、Debugger、Artifact Graph |
+| Reproduce | 独立运行时生成输出，真实请求满足完整 Contract | Runtime Recipe、Engine、Validator、Solver |
 
-Coordinator 最多执行三次语义尝试，成功即停止。它不会在尝试之间自动修改 Runtime Recipe 或处理 blocker；三次均未通过时，只返回首个 blocker 和下一动作。Agent 再按该结果补充证据或手工修改 Recipe 后发起新一轮恢复。`environment` 表示缺失的浏览器语义，`resource` 表示依赖或网络响应问题，`program` 表示当前引擎无法执行的程序行为，`validation` 表示已生成输出但真实请求未接受。
+定位、运行时诊断、算法提取和 handoff 不再是必须按顺序经过的阶段，而是为补齐当前完成门选择的策略。Recovery Identity 由选中证据的内容哈希、Output Contract 哈希、Runtime Recipe 哈希和完整 Capability ID 组成。Recovery Identity 未变化时，Coordinator 只执行一次，并将成功或失败的终态结果保存为 Artifact 供后续调用跨调用复用；相同 blocker 不会通过重复运行同一 Recipe 解决。只有选中证据、Contract、Recipe 或实际执行能力发生变化后才允许再次恢复。`environment` 表示缺失的浏览器语义，`resource` 表示依赖或网络响应问题，`program` 表示当前引擎无法执行的程序行为，`validation` 表示已生成输出但真实请求未接受。
 
 ## DSH Agent 与 Dialog
 
@@ -192,6 +187,8 @@ DSH Web Host Plane
         ├── Patchright Chromium + CDP + Dialog
         ├── Browser Oracle + SessionArtifactStore
         ├── Session Artifact Graph + RecoveryCoordinator
+        ├── Recovery Capability Registry
+        │   └── Evidence Selector + Engine + Output Adapter + Validator + Exporter
         └── sdenv Worker + CycleTLS Validator + Solver
 
 MCP stdio adapter

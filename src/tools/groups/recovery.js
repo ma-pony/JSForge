@@ -1,8 +1,8 @@
 import { RecoveryCoordinator } from '../../recovery/coordinator.js'
-import { OUTPUT_KINDS } from '../../recovery/contracts.js'
+import { SUPPORTED_RECOVERY_OUTPUT_KINDS } from '../../recovery/default-capabilities.js'
 import { defineDeepSpiderTool } from '../catalog.js'
 
-const OUTPUT_KIND_VALUES = [...OUTPUT_KINDS]
+const OUTPUT_KIND_VALUES = [...SUPPORTED_RECOVERY_OUTPUT_KINDS]
 const RECOVERY_MODES = ['auto', 'semantic', 'algorithm']
 const STRATEGIES = new Set(['semantic-runtime', 'algorithm-recovery'])
 const EVIDENCE_LEVELS = new Set(['observed', 'replayed', 'reproduced'])
@@ -11,12 +11,18 @@ const BLOCKER_OPERATIONS = new Set([
   'algorithm-recovery',
   'cycle-tls-initialize',
   'cycle-tls-request',
+  'resolve-recovery-capability',
   'validate-generated-output',
+  'validate-output-contract',
   'validate-output-kind',
 ])
 const BLOCKER_REASONS = new Set([
   'algorithm-recovery-engine-not-implemented',
+  'unsupported-output-kind',
+  'unsupported-recovery-mode',
+  'status-title-or-output-mismatch',
   'status-title-or-cookie-mismatch',
+  'unsupported-success-condition',
 ])
 const NEXT_ACTIONS = new Set([
   'implement-algorithm-recovery-engine',
@@ -26,6 +32,8 @@ const NEXT_ACTIONS = new Set([
   'refresh-request-contract',
   'repair-cycle-tls-runtime',
   'retry-network-request',
+  'select-supported-output',
+  'select-compatible-validator',
 ])
 const SOLVER_ID = /^artifact-[a-f0-9]{64}$/
 

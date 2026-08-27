@@ -1,17 +1,11 @@
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
 import { artifactManifest, buildArtifactGraph } from './artifact-graph.js'
 import { createOutputContract, hashContract, validateOutputContract } from './contracts.js'
-import { createRuntimeRecipe, hashRecipe, validateRuntimeRecipe } from './recipe.js'
-import { exportSolver } from './solver.js'
+import { defaultRecoveryCapabilities } from './default-capabilities.js'
 import { detectStrategy } from './strategy-detector.js'
 import { aggregateUnknowns } from './unknowns.js'
-import { validateGeneratedOutput } from './validation.js'
-
-const MAX_ATTEMPTS = 3
-const TEMPLATE_BLOCKED_HEADERS = new Set([
-  'cookie', 'host', 'connection', 'content-length', 'accept-encoding', 'user-agent',
-])
 
 function throwIfAborted(signal) {
   if (!signal?.aborted) return
@@ -24,53 +18,20 @@ function normalizedUrl(value) {
   return url.href
 }
 
-function titleOf(html) {
-  const match = String(html || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i)
-  return match?.[1]?.replace(/\s+/g, ' ').trim() || ''
-}
-
-function templateHeaders(headers) {
-  return Object.fromEntries(
-    Object.entries(headers || {}).filter(([name]) => !TEMPLATE_BLOCKED_HEADERS.has(name.toLowerCase())),
-  )
-}
-
-function evidencePair(graph, url) {
-  const documents = graph.nodes
-    .filter((node) => (
-      node.kind === 'response'
-      && node.resourceType === 'Document'
-      && normalizedUrl(node.url) === url
-    ))
-    .sort((left, right) => left.timestamp - right.timestamp)
-  for (let index = documents.length - 1; index >= 0; index -= 1) {
-    const accepted = documents[index]
-    if (accepted.status < 200 || accepted.status >= 400) continue
-    const challenge = documents.slice(0, index).findLast((candidate) => candidate.status >= 400)
-    if (challenge) return { challenge, accepted }
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
   }
-  throw new Error(`Current Session does not contain challenge and accepted Document evidence for ${url}`)
+  return JSON.stringify(value)
 }
 
-function evidenceIdentity(node) {
-  return {
-    id: node.id,
-    bodyHash: node.bodyHash,
-  }
-}
-
-function evidenceIdentityPair(challenge, accepted) {
-  return {
-    challenge: evidenceIdentity(challenge),
-    accepted: evidenceIdentity(accepted),
-  }
+function hashValue(value) {
+  return createHash('sha256').update(stableJson(value)).digest('hex')
 }
 
 function sameEvidence(left, right) {
-  return left?.challenge?.id === right.challenge.id
-    && left?.challenge?.bodyHash === right.challenge.bodyHash
-    && left?.accepted?.id === right.accepted.id
-    && left?.accepted?.bodyHash === right.accepted.bodyHash
+  return stableJson(left) === stableJson(right)
 }
 
 async function artifactJson(store, entry) {
@@ -83,12 +44,42 @@ async function artifactJson(store, entry) {
   }
 }
 
-async function loadContracts(store, url, outputKind, outputSelector, evidence) {
+async function loadRecoveryOutcome(store, recoveryIdentityHash) {
+  const entries = await store.listArtifacts({ kind: 'recovery-outcome' })
+  for (const entry of entries.toReversed()) {
+    if (entry.metadata?.recoveryIdentityHash !== recoveryIdentityHash) continue
+    const outcome = await artifactJson(store, entry)
+    if (outcome && typeof outcome === 'object' && Array.isArray(outcome.attempts)) return outcome
+  }
+  return null
+}
+
+async function saveRecoveryOutcome({ store, result, sourceId, url, recoveryIdentity, recoveryIdentityHash }) {
+  await store.saveArtifact({
+    kind: 'recovery-outcome',
+    origin: 'derived',
+    sourceId,
+    url,
+    content: result,
+    metadata: {
+      recoveryIdentity,
+      recoveryIdentityHash,
+      accepted: result.validation?.accepted === true,
+      blockerKind: result.blocker?.kind || null,
+    },
+  })
+  return result
+}
+
+async function loadContracts(store, url, outputKind, outputSelector, evidence, evidenceSelectorId) {
   const entries = await store.listArtifacts({ kind: 'output-contract' })
   let previous = null
   for (const entry of entries.toReversed()) {
     if (entry.metadata?.url !== url || entry.metadata?.outputKind !== outputKind) continue
     if ((entry.metadata?.outputSelector ?? null) !== outputSelector) continue
+    const storedSelectorId = entry.metadata?.evidenceSelectorId
+    if (storedSelectorId && storedSelectorId !== evidenceSelectorId) continue
+    if (!storedSelectorId && evidenceSelectorId !== 'document-challenge') continue
     const value = await artifactJson(store, entry)
     if (!value) continue
     try {
@@ -102,14 +93,17 @@ async function loadContracts(store, url, outputKind, outputSelector, evidence) {
   return { current: null, previous }
 }
 
-async function loadRecipe(store, contractArtifactId) {
+async function loadRecipe(store, contractArtifactId, engineId, validateRecipe) {
   const entries = await store.listArtifacts({ kind: 'runtime-recipe' })
   for (const entry of entries.toReversed()) {
     if (entry.sourceId !== contractArtifactId) continue
+    const storedEngineId = entry.metadata?.engineId
+    if (storedEngineId && storedEngineId !== engineId) continue
+    if (!storedEngineId && engineId !== 'sdenv') continue
     const value = await artifactJson(store, entry)
     if (!value) continue
     try {
-      return { artifact: entry, value: validateRuntimeRecipe(value) }
+      return { artifact: entry, value: validateRecipe(value) }
     } catch {
       // A stale artifact cannot become the current runtime recipe.
     }
@@ -122,7 +116,7 @@ function observedValidation(contract = null, outputArtifactIds = []) {
     level: 'observed', accepted: false, status: null,
     expectedStatus: contract?.success?.status ?? null,
     title: null, expectedTitle: contract?.success?.title ?? null,
-    outputArtifactIds,
+    outputArtifactIds, generatedOutputCount: 0, generatedOutputNames: [],
   }
 }
 
@@ -147,6 +141,28 @@ function algorithmResult(context = {}) {
     suggestedRecipeActions: [],
     nextActions: [{ action: 'implement-algorithm-recovery-engine' }],
     attempts: details.attempts || [],
+    solver: null,
+  }
+}
+
+function unsupportedCapabilityResult(resolution) {
+  const blocker = {
+    kind: resolution.kind,
+    operation: resolution.operation,
+    path: null,
+    caller: null,
+    reason: resolution.reason,
+    blocking: true,
+    count: 1,
+  }
+  return {
+    strategy: 'recovery-unavailable',
+    validation: observedValidation(),
+    unknowns: [blocker],
+    blocker,
+    suggestedRecipeActions: [],
+    nextActions: [{ action: 'select-supported-output' }],
+    attempts: [],
     solver: null,
   }
 }
@@ -177,14 +193,17 @@ function recipeActions(unknowns) {
   return actions
 }
 
-function publicAttempt({ attempt, runId, result, outputs, validation }) {
+function publicAttempt({ attempt, runId, result, outputs, validation, outputAdapter }) {
+  const summary = typeof outputAdapter.summarize === 'function'
+    ? outputAdapter.summarize(outputs)
+    : { outputCount: outputs.length, outputNames: [] }
   return {
     attempt,
     runId,
     ok: result.ok,
     engine: result.engine,
-    outputCount: outputs.length,
-    outputNames: outputs.filter(({ kind }) => kind === 'cookie').map(({ name }) => name),
+    outputCount: summary.outputCount,
+    outputNames: summary.outputNames,
     unknownCount: result.unknowns.length,
     validation,
   }
@@ -195,48 +214,57 @@ function artifactReference(artifact) {
 }
 
 export class RecoveryCoordinator {
-  constructor(runtime) {
+  constructor(runtime, { capabilities = defaultRecoveryCapabilities } = {}) {
     if (!runtime || typeof runtime !== 'object') throw new TypeError('runtime must be provided')
+    if (!capabilities || typeof capabilities.resolve !== 'function') {
+      throw new TypeError('capabilities must provide resolve()')
+    }
     this.runtime = runtime
+    this.capabilities = capabilities
   }
 
   async recover({ url, outputKind, outputSelector = null, mode = 'auto', signal } = {}) {
-    const strategy = detectStrategy({ mode })
-    if (strategy === 'algorithm-recovery') return algorithmResult()
+    const plan = this.capabilities.resolve({ mode, outputKind })
+    if (!plan.ok) {
+      if (mode === 'algorithm') return algorithmResult()
+      return unsupportedCapabilityResult(plan)
+    }
+    const strategy = plan.engine.strategy || 'semantic-runtime'
     throwIfAborted(signal)
     const targetUrl = normalizedUrl(url)
     const store = this.runtime.dataStore
     if (!store || typeof store.saveArtifact !== 'function') throw new TypeError('runtime must own a SessionArtifactStore')
-    if (typeof this.runtime.getRecoveryRuntime !== 'function') throw new TypeError('runtime must provide getRecoveryRuntime()')
 
     const graph = await buildArtifactGraph({ store })
-    const { challenge, accepted } = evidencePair(graph, targetUrl)
-    const evidence = evidenceIdentityPair(challenge, accepted)
+    const selectedEvidence = plan.evidenceSelector.select({ graph, url: targetUrl })
+    const evidence = selectedEvidence.evidence
     const graphArtifact = await store.saveArtifact({
       kind: 'artifact-graph',
       origin: 'derived',
-      sourceId: challenge.id,
+      sourceId: selectedEvidence.sourceId,
       url: targetUrl,
       content: artifactManifest(graph),
-      metadata: { url: targetUrl, challengeId: challenge.id, acceptedId: accepted.id },
+      metadata: {
+        url: targetUrl,
+        evidenceSelectorId: plan.evidenceSelector.id,
+        evidence,
+      },
     })
 
-    const loadedContracts = await loadContracts(store, targetUrl, outputKind, outputSelector, evidence)
+    const loadedContracts = await loadContracts(
+      store,
+      targetUrl,
+      outputKind,
+      outputSelector,
+      evidence,
+      plan.evidenceSelector.id,
+    )
     let contractRecord = loadedContracts.current
     if (!contractRecord) {
       const contract = createOutputContract({
         kind: outputKind,
         selector: outputSelector,
-        entryUrl: challenge.url,
-        request: {
-          url: accepted.url,
-          method: accepted.method,
-          headers: templateHeaders(accepted.requestHeaders),
-        },
-        success: {
-          status: accepted.status,
-          title: titleOf(accepted.body) || null,
-        },
+        ...selectedEvidence.contractTemplate,
       })
       const artifact = await store.saveArtifact({
         kind: 'output-contract',
@@ -244,19 +272,35 @@ export class RecoveryCoordinator {
         sourceId: graphArtifact.id,
         url: targetUrl,
         content: contract,
-        metadata: { url: targetUrl, outputKind, outputSelector, evidence },
+        metadata: {
+          url: targetUrl,
+          outputKind,
+          outputSelector,
+          evidenceSelectorId: plan.evidenceSelector.id,
+          evidence,
+        },
       })
       contractRecord = { artifact, value: contract }
     }
     const contract = contractRecord.value
     const contractHash = hashContract(contract)
 
-    let recipeRecord = await loadRecipe(store, contractRecord.artifact.id)
+    let recipeRecord = await loadRecipe(
+      store,
+      contractRecord.artifact.id,
+      plan.engine.id,
+      plan.engine.validateRecipe,
+    )
     if (!recipeRecord) {
       const previousRecipe = loadedContracts.previous
-        ? await loadRecipe(store, loadedContracts.previous.artifact.id)
+        ? await loadRecipe(
+          store,
+          loadedContracts.previous.artifact.id,
+          plan.engine.id,
+          plan.engine.validateRecipe,
+        )
         : null
-      const recipe = previousRecipe?.value || createRuntimeRecipe()
+      const recipe = previousRecipe?.value || plan.engine.createRecipe()
       const artifact = await store.saveArtifact({
         kind: 'runtime-recipe',
         origin: 'derived',
@@ -265,6 +309,7 @@ export class RecoveryCoordinator {
         content: recipe,
         metadata: {
           contractHash,
+          engineId: plan.engine.id,
           previousContractId: loadedContracts.previous?.artifact.id || null,
           previousRecipeId: previousRecipe?.artifact.id || null,
         },
@@ -272,182 +317,235 @@ export class RecoveryCoordinator {
       recipeRecord = { artifact, value: recipe }
     }
     const recipe = recipeRecord.value
-    const recipeHash = hashRecipe(recipe)
-    const recoveryRuntime = this.runtime.getRecoveryRuntime()
+    const recipeHash = plan.engine.hashRecipe(recipe)
+    const recoveryIdentity = {
+      evidenceHash: hashValue(evidence),
+      contractHash,
+      recipeHash,
+      capability: {
+        evidenceSelector: plan.evidenceSelector.id,
+        engine: plan.engine.id,
+        outputAdapter: plan.outputAdapter.id,
+        validator: plan.validator.id,
+        exporter: plan.exporter.id,
+      },
+    }
+    const recoveryIdentityHash = hashValue(recoveryIdentity)
+    const existingOutcome = await loadRecoveryOutcome(store, recoveryIdentityHash)
+    if (existingOutcome) return existingOutcome
     const attempts = []
     const rawUnknowns = []
-    let finalValidation = null
-    let finalValidationArtifact = null
-
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-      throwIfAborted(signal)
-      const runId = `recovery-${Date.now().toString(36)}-${attempt}`
-      const result = await recoveryRuntime.execute({ runId, contract, recipe, signal })
-      throwIfAborted(signal)
-      const runIdentity = {
-        contractHash,
-        recipeHash,
-        engine: {
-          name: result.engine?.name ?? null,
-          version: result.engine?.version ?? null,
-        },
+    const attempt = 1
+    throwIfAborted(signal)
+    const runId = `recovery-${Date.now().toString(36)}-${attempt}`
+    const result = await plan.engine.execute({
+      runtime: this.runtime,
+      runId,
+      contract,
+      recipe,
+      signal,
+    })
+    throwIfAborted(signal)
+    const runIdentity = {
+      ...recoveryIdentity,
+      engine: {
+        name: result.engine?.name ?? plan.engine.id,
+        version: result.engine?.version ?? null,
+      },
+      upstream: {
+        artifactGraph: artifactReference(graphArtifact),
+        contract: artifactReference(contractRecord.artifact),
+        recipe: artifactReference(recipeRecord.artifact),
+      },
+    }
+    const runArtifact = await store.saveArtifact({
+      kind: 'runtime-run',
+      origin: 'derived',
+      sourceId: recipeRecord.artifact.id,
+      url: targetUrl,
+      content: { attempt, runId, result },
+      metadata: {
+        runId,
+        attempt,
+        ok: result.ok,
+        engine: result.engine?.name || plan.engine.id,
+        identity: runIdentity,
+      },
+    })
+    const outputs = []
+    for (const output of result.outputs) {
+      const outputIdentity = {
+        ...runIdentity,
         upstream: {
-          artifactGraph: artifactReference(graphArtifact),
-          contract: artifactReference(contractRecord.artifact),
-          recipe: artifactReference(recipeRecord.artifact),
+          ...runIdentity.upstream,
+          runtimeRun: artifactReference(runArtifact),
         },
       }
-      const runArtifact = await store.saveArtifact({
-        kind: 'runtime-run',
-        origin: 'derived',
-        sourceId: recipeRecord.artifact.id,
+      const artifact = await store.saveArtifact({
+        kind: 'generated-output',
+        origin: 'generated',
+        sourceId: runArtifact.id,
         url: targetUrl,
-        content: { attempt, runId, result },
+        content: output,
         metadata: {
-          runId, attempt, ok: result.ok, engine: result.engine?.name || null, identity: runIdentity,
+          runId,
+          outputKind: output.kind,
+          outputName: output.name || null,
+          identity: outputIdentity,
         },
       })
-      const outputs = []
-      for (const output of result.outputs) {
-        const outputIdentity = {
-          ...runIdentity,
-          upstream: {
-            ...runIdentity.upstream,
-            runtimeRun: artifactReference(runArtifact),
-          },
-        }
-        const artifact = await store.saveArtifact({
-          kind: 'generated-output',
-          origin: 'generated',
-          sourceId: runArtifact.id,
-          url: targetUrl,
-          content: output,
-          metadata: {
-            runId, outputKind: output.kind, outputName: output.name || null, identity: outputIdentity,
-          },
-        })
-        outputs.push({ ...output, artifactId: artifact.id })
-      }
-      rawUnknowns.push(...result.unknowns)
+      outputs.push({ ...output, artifactId: artifact.id })
+    }
+    rawUnknowns.push(...result.unknowns)
 
-      const nextStrategy = detectStrategy({ mode, result })
-      if (nextStrategy === 'algorithm-recovery') {
-        const validation = observedValidation(contract, outputs.map(({ artifactId }) => artifactId))
-        attempts.push(publicAttempt({ attempt, runId, result, outputs, validation }))
-        return algorithmResult({
-          sessionId: this.runtime.sessionId,
-          contract,
-          recipe,
-          graphArtifactId: graphArtifact.id,
-          attempts,
-          validation,
-          rawUnknowns,
-        })
-      }
-
-      let validation
-      try {
-        validation = await validateGeneratedOutput({
-          contract,
-          outputs,
-          requestTemplate: {
-            headers: contract.request.headers,
-            userAgent: recipe.userAgent,
-            strictSSL: recipe.strictSSL,
-            timeoutMs: recipe.timeoutMs,
-          },
-          signal,
-        })
-      } catch (error) {
-        if (signal?.aborted) throw signal.reason
-        validation = {
-          level: 'observed', accepted: false, status: null,
-          expectedStatus: contract.success.status ?? null,
-          title: null, expectedTitle: contract.success.title ?? null,
-          outputArtifactIds: outputs.map(({ artifactId }) => artifactId),
-          error: error instanceof Error ? error.message : String(error),
-        }
-      }
-      if (!validation.accepted) {
-        if (validation.failure) {
-          rawUnknowns.push(validation.failure)
-        } else {
-          rawUnknowns.push({
-            category: 'validation-result',
-            operation: 'validate-generated-output',
-            path: contract.request.url,
-            reason: 'status-title-or-cookie-mismatch',
-            blocking: true,
-          })
-        }
-      }
-      const sourceId = outputs[0]?.artifactId || runArtifact.id
-      finalValidationArtifact = await store.saveArtifact({
-        kind: 'validation',
-        origin: 'derived',
-        sourceId,
-        url: targetUrl,
-        content: validation,
-        metadata: { runId, attempt, level: validation.level, accepted: validation.accepted },
+    const nextStrategy = detectStrategy({ mode, result })
+    if (nextStrategy === 'algorithm-recovery') {
+      const validation = observedValidation(contract, outputs.map(({ artifactId }) => artifactId))
+      attempts.push(publicAttempt({ attempt, runId, result, outputs, validation, outputAdapter: plan.outputAdapter }))
+      const outcome = algorithmResult({
+        sessionId: this.runtime.sessionId,
+        contract,
+        recipe,
+        graphArtifactId: graphArtifact.id,
+        attempts,
+        validation,
+        rawUnknowns,
       })
-      finalValidation = validation
-      attempts.push(publicAttempt({ attempt, runId, result, outputs, validation }))
+      return saveRecoveryOutcome({
+        store,
+        result: outcome,
+        sourceId: runArtifact.id,
+        url: targetUrl,
+        recoveryIdentity,
+        recoveryIdentityHash,
+      })
+    }
 
-      if (validation.accepted) {
-        const solverDir = join(
-          this.runtime.paths.solvers,
-          `${contractHash.slice(0, 16)}-${recipeHash.slice(0, 16)}`,
-        )
-        const solver = await exportSolver({
-          sessionId: this.runtime.sessionId,
-          contract,
-          recipe,
-          validation,
-          solverDir,
-        })
-        const solverArtifact = await store.saveArtifact({
-          kind: 'solver',
-          origin: 'derived',
-          sourceId: finalValidationArtifact.id,
-          url: targetUrl,
-          content: solver,
-          metadata: { directory: solver.directory, validationLevel: validation.level },
-        })
-        return {
-          sessionId: this.runtime.sessionId,
-          strategy,
-          contract,
-          recipe,
-          graphArtifactId: graphArtifact.id,
-          attempts,
-          validation,
-          unknowns: aggregateUnknowns(rawUnknowns),
-          blocker: null,
-          suggestedRecipeActions: [],
-          nextActions: [],
-          solver: { ...solver, artifactId: solverArtifact.id },
-        }
+    let validation
+    try {
+      validation = await plan.validator.validate({
+        contract,
+        outputs,
+        recipe,
+        engine: plan.engine,
+        outputAdapter: plan.outputAdapter,
+        signal,
+      })
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason
+      validation = {
+        level: 'observed',
+        accepted: false,
+        status: null,
+        expectedStatus: contract.success.status ?? null,
+        title: null,
+        expectedTitle: contract.success.title ?? null,
+        outputArtifactIds: outputs.map(({ artifactId }) => artifactId),
+        generatedOutputCount: 0,
+        generatedOutputNames: [],
+        error: error instanceof Error ? error.message : String(error),
       }
+    }
+    if (!validation.accepted) {
+      if (validation.failure) {
+        rawUnknowns.push(validation.failure)
+      } else {
+        rawUnknowns.push({
+          category: 'validation-result',
+          operation: 'validate-generated-output',
+          path: contract.request.url,
+          reason: 'status-title-or-output-mismatch',
+          blocking: true,
+        })
+      }
+    }
+    const sourceId = outputs[0]?.artifactId || runArtifact.id
+    const validationArtifact = await store.saveArtifact({
+      kind: 'validation',
+      origin: 'derived',
+      sourceId,
+      url: targetUrl,
+      content: validation,
+      metadata: { runId, attempt, level: validation.level, accepted: validation.accepted },
+    })
+    attempts.push(publicAttempt({
+      attempt,
+      runId,
+      result,
+      outputs,
+      validation,
+      outputAdapter: plan.outputAdapter,
+    }))
 
+    if (validation.accepted) {
+      const solverDir = join(
+        this.runtime.paths.solvers,
+        `${contractHash.slice(0, 16)}-${recipeHash.slice(0, 16)}`,
+      )
+      const solver = await plan.exporter.export({
+        sessionId: this.runtime.sessionId,
+        contract,
+        recipe,
+        validation,
+        solverDir,
+      })
+      const solverArtifact = await store.saveArtifact({
+        kind: 'solver',
+        origin: 'derived',
+        sourceId: validationArtifact.id,
+        url: targetUrl,
+        content: solver,
+        metadata: { directory: solver.directory, validationLevel: validation.level },
+      })
+      const outcome = {
+        sessionId: this.runtime.sessionId,
+        strategy,
+        contract,
+        recipe,
+        graphArtifactId: graphArtifact.id,
+        attempts,
+        validation,
+        unknowns: aggregateUnknowns(rawUnknowns),
+        blocker: null,
+        suggestedRecipeActions: [],
+        nextActions: [],
+        solver: { ...solver, artifactId: solverArtifact.id },
+      }
+      return saveRecoveryOutcome({
+        store,
+        result: outcome,
+        sourceId: solverArtifact.id,
+        url: targetUrl,
+        recoveryIdentity,
+        recoveryIdentityHash,
+      })
     }
 
     const unknowns = aggregateUnknowns(rawUnknowns)
     const blocker = unknowns.find(({ blocking }) => blocking) || unknowns[0] || null
     const suggestedRecipeActions = recipeActions(unknowns)
-    return {
+    const outcome = {
       sessionId: this.runtime.sessionId,
       strategy,
       contract,
       recipe,
       graphArtifactId: graphArtifact.id,
       attempts,
-      validation: finalValidation,
-      validationArtifactId: finalValidationArtifact?.id || null,
+      validation,
+      validationArtifactId: validationArtifact.id,
       unknowns,
       blocker,
       suggestedRecipeActions,
       nextActions: suggestedRecipeActions,
       solver: null,
     }
+    return saveRecoveryOutcome({
+      store,
+      result: outcome,
+      sourceId: validationArtifact.id,
+      url: targetUrl,
+      recoveryIdentity,
+      recoveryIdentityHash,
+    })
   }
 }

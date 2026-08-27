@@ -86,9 +86,7 @@ test('recover_target_output exposes the exact bounded public contract', () => {
   const tool = createRecoveryTool({ coordinatorFactory: () => ({ recover: async () => ({}) }) })
 
   assert.equal(tool.name, 'recover_target_output')
-  assert.deepEqual(tool.parameters.outputKind.enum, [
-    'cookie', 'header', 'query', 'body', 'return-value', 'navigation',
-  ])
+  assert.deepEqual(tool.parameters.outputKind.enum, ['cookie'])
   assert.equal(tool.parameters.outputKind.required, true)
   assert.deepEqual(tool.parameters.mode.enum, ['auto', 'semantic', 'algorithm'])
   assert.equal(tool.parameters.mode.default, 'auto')
@@ -133,6 +131,62 @@ test('recover_target_output maps untrusted Coordinator strings to fixed public c
     nextAction: 'inspect-session-artifacts',
   })
   assert.doesNotMatch(JSON.stringify({ result, sent }), /SECRET|source|private\/tmp|rawTrace/)
+})
+
+test('recover_target_output preserves fixed capability-resolution blocker codes', async () => {
+  const tool = createRecoveryTool({
+    coordinatorFactory: () => ({
+      recover: async () => ({
+        strategy: 'recovery-unavailable',
+        graphArtifactId: null,
+        attempts: [],
+        validation: { level: 'observed', accepted: false },
+        blocker: {
+          kind: 'program',
+          operation: 'resolve-recovery-capability',
+          reason: 'unsupported-output-kind',
+        },
+        nextActions: [{ action: 'select-supported-output' }],
+        solver: null,
+      }),
+    }),
+  })
+
+  const result = await tool.execute({}, {
+    url: 'https://example.test/', outputKind: 'cookie',
+  })
+
+  assert.equal(result.blocker.operation, 'resolve-recovery-capability')
+  assert.equal(result.blocker.reason, 'unsupported-output-kind')
+  assert.equal(result.nextAction, 'select-supported-output')
+})
+
+test('recover_target_output preserves unsupported Validator contract codes', async () => {
+  const tool = createRecoveryTool({
+    coordinatorFactory: () => ({
+      recover: async () => ({
+        strategy: 'semantic-runtime',
+        graphArtifactId: 'artifact-graph',
+        attempts: [{ outputCount: 1 }],
+        validation: { level: 'observed', accepted: false },
+        blocker: {
+          kind: 'program',
+          operation: 'validate-output-contract',
+          reason: 'unsupported-success-condition',
+        },
+        nextActions: [{ action: 'select-compatible-validator' }],
+        solver: null,
+      }),
+    }),
+  })
+
+  const result = await tool.execute({}, {
+    url: 'https://example.test/', outputKind: 'cookie',
+  })
+
+  assert.equal(result.blocker.operation, 'validate-output-contract')
+  assert.equal(result.blocker.reason, 'unsupported-success-condition')
+  assert.equal(result.nextAction, 'select-compatible-validator')
 })
 
 test('recover_target_output stores Coordinator errors but returns one fixed compact failure', async () => {

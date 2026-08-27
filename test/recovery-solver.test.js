@@ -54,7 +54,7 @@ test('exported Solver rejects a matching response when sdenv generated no Cookie
     sessionId: 'solver-anchor', contract, recipe,
     validation: {
       level: 'reproduced', accepted: true,
-      generatedCookieCount: 1, generatedCookieNames: ['previously-generated'],
+      generatedOutputCount: 1, generatedOutputNames: ['previously-generated'],
     },
     solverDir: directory,
   })
@@ -101,7 +101,7 @@ test('exported Solver validates one legal generated selector Cookie', { timeout:
     sessionId: 'solver-success', contract, recipe: createRuntimeRecipe({ timeoutMs: 1000 }),
     validation: {
       level: 'reproduced', accepted: true,
-      generatedCookieCount: 1, generatedCookieNames: ['clearance'],
+      generatedOutputCount: 1, generatedOutputNames: ['clearance'],
     },
     solverDir: directory,
   })

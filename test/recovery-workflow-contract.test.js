@@ -13,6 +13,8 @@ function read(relativePath) {
 test('packaged skill routes semantic recovery through one Session-owned high-level tool', () => {
   const skill = read('skills/deepspider/SKILL.md')
 
+  assert.match(skill, /Define（定义）[\s\S]*Observe（观察）[\s\S]*Reproduce（复现）/)
+  assert.match(skill, /能力注册表/)
   assert.match(skill, /recover_target_output/)
   assert.match(skill, /Browser Oracle/)
   assert.match(skill, /Output Contract/)
@@ -22,6 +24,13 @@ test('packaged skill routes semantic recovery through one Session-owned high-lev
   assert.match(skill, /DSH 原生选择题/)
   assert.match(skill, /environment.*resource.*Hook.*Debugger/s)
   assert.match(skill, /program.*mode: algorithm/s)
+  assert.match(skill, /Recovery Identity/)
+  assert.match(skill, /身份未变化.*不得重试/)
+  assert.match(skill, /CycleTLS Validator.*status.*title/s)
+  assert.match(skill, /unsupported-success-condition/)
+  assert.match(skill, /终态结果.*跨调用复用/s)
+  assert.doesNotMatch(skill, /八阶段工作流/)
+  assert.doesNotMatch(skill, /编写 Python 实现/)
 })
 
 test('runtime guidance uses the Session Recipe, Worker, and real request contract', () => {

@@ -11,6 +11,13 @@ import { SessionArtifactStore } from '../src/store/SessionArtifactStore.js'
 
 const TARGET_URL = 'https://identity.example.test/target'
 const ENGINE = { name: 'sdenv', version: 'test-engine-7.4.2' }
+const CAPABILITY = {
+  evidenceSelector: 'document-challenge',
+  engine: 'sdenv',
+  outputAdapter: 'cookie',
+  validator: 'cycle-tls-http',
+  exporter: 'sdenv-solver',
+}
 const COOKIE_SECRET = 'must-not-enter-identity'
 
 function artifactOf(artifacts, kind) {
@@ -23,10 +30,15 @@ function assertArtifactReference(actual, expected) {
 
 function assertIdentity(identity, { contract, recipe, graph, contractArtifact, recipeArtifact, runArtifact }) {
   assert.ok(identity, 'saved Artifact must contain runtime identity')
-  assert.deepEqual(Object.keys(identity).sort(), ['contractHash', 'engine', 'recipeHash', 'upstream'])
+  assert.deepEqual(
+    Object.keys(identity).sort(),
+    ['capability', 'contractHash', 'engine', 'evidenceHash', 'recipeHash', 'upstream'],
+  )
+  assert.match(identity.evidenceHash, /^[a-f0-9]{64}$/)
   assert.equal(identity.contractHash, hashContract(contract))
   assert.equal(identity.recipeHash, hashRecipe(recipe))
   assert.deepEqual(identity.engine, ENGINE)
+  assert.deepEqual(identity.capability, CAPABILITY)
   assert.deepEqual(Object.keys(identity.upstream).sort(), runArtifact
     ? ['artifactGraph', 'contract', 'recipe', 'runtimeRun']
     : ['artifactGraph', 'contract', 'recipe'])
