@@ -148,6 +148,49 @@ test('DeepSpiderRuntime closes a lazily created browser only once', async () => 
   assert.equal(closes, 1)
 })
 
+test('DeepSpiderRuntime lets the Agent keep or release only its browser', async () => {
+  let browserCreations = 0
+  const closedBrowsers = []
+  let storeCloses = 0
+  const runtime = new DeepSpiderRuntime({
+    sessionId: 'alpha',
+    paths: { browserData: '/sessions/alpha/browser-data' },
+    browserFactory: () => {
+      const id = ++browserCreations
+      return {
+        launch: async () => {},
+        close: async (reason) => closedBrowsers.push([id, reason]),
+      }
+    },
+    dataStoreFactory: () => ({
+      close: async () => { storeCloses += 1 },
+    }),
+  })
+
+  await runtime.getBrowserClient()
+  assert.deepEqual(await runtime.manageBrowserSession('keep'), {
+    action: 'keep',
+    browser: 'active',
+  })
+  assert.equal(closedBrowsers.length, 0)
+
+  assert.deepEqual(await runtime.manageBrowserSession('release'), {
+    action: 'release',
+    browser: 'released',
+  })
+  assert.deepEqual(closedBrowsers, [[1, 'Agent released browser session']])
+  assert.equal(storeCloses, 0)
+
+  await runtime.getBrowserClient()
+  assert.equal(browserCreations, 2)
+  await runtime.close('session disposed')
+  assert.deepEqual(closedBrowsers, [
+    [1, 'Agent released browser session'],
+    [2, 'session disposed'],
+  ])
+  assert.equal(storeCloses, 1)
+})
+
 test('DeepSpiderRuntime creates and closes its Session recovery runtime before the browser', async () => {
   const events = []
   let recoveryFactoryCalls = 0

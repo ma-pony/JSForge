@@ -75,6 +75,25 @@ export const tools = Object.freeze([
     },
   }),
   defineDeepSpiderTool({
+    name: 'browser_session',
+    description: 'Let the Agent keep the live browser for follow-up work or release only the browser now. Agent disposal and Host shutdown always release it.',
+    parameters: {
+      action: {
+        type: 'string',
+        enum: ['keep', 'release'],
+        required: true,
+        description: 'Keep the live browser for follow-up work or release it now',
+      },
+    },
+    async execute(runtime, { action }, _signal) {
+      try {
+        return await runtime.manageBrowserSession(action)
+      } catch (error) {
+        failure(error)
+      }
+    },
+  }),
+  defineDeepSpiderTool({
     name: 'navigate_page',
     description: 'Navigate to URL or reload current page',
     parameters: {

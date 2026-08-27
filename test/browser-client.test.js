@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
+import { setImmediate } from 'node:timers/promises'
 
 import { BrowserClient } from '../src/browser/client.js'
 
@@ -40,12 +41,21 @@ function createHarness({ failMethod = null } = {}) {
       browser.closed = true
     },
   }
+  context.browser = () => browser
   const browserType = {
     launch: async () => browser,
     launchPersistentContext: async () => context,
   }
   const store = { startSession() {} }
   return { browser, browserType, cdp, context, page, store }
+}
+
+function deferred() {
+  let resolve
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
 }
 
 test('observe mode adds no init script or Runtime binding', async () => {
@@ -93,4 +103,57 @@ test('initial setup failure closes the partial browser and rejects launch', asyn
     /Network\.enable failed/,
   )
   assert.equal(harness.browser.closed, true)
+})
+
+test('concurrent BrowserClient cleanup callers await the same close', async () => {
+  const harness = createHarness()
+  const closing = deferred()
+  let contextCloses = 0
+  harness.context.close = async () => {
+    contextCloses += 1
+    await closing.promise
+  }
+  const client = new BrowserClient({
+    dataStore: harness.store,
+    browserType: harness.browserType,
+  })
+  await client.launch({
+    mode: 'observe',
+    disableInterceptors: true,
+    userDataDir: '/sessions/alpha/browser-data',
+  })
+
+  const first = client.cleanup()
+  const second = client.cleanup()
+  try {
+    assert.equal(first, second)
+    assert.equal(contextCloses, 0)
+
+    await setImmediate()
+    assert.equal(contextCloses, 1)
+  } finally {
+    closing.resolve()
+    await Promise.allSettled([first, second])
+  }
+})
+
+test('BrowserClient cleanup still closes the browser and rejects when an earlier step fails', async () => {
+  const harness = createHarness()
+  let contextCloses = 0
+  harness.context.close = async () => { contextCloses += 1 }
+  const client = new BrowserClient({
+    dataStore: harness.store,
+    browserType: harness.browserType,
+  })
+  await client.launch({
+    mode: 'observe',
+    disableInterceptors: true,
+    userDataDir: '/sessions/alpha/browser-data',
+  })
+  client.closeDialog = async () => {
+    throw new Error('dialog close failed')
+  }
+
+  await assert.rejects(client.cleanup(), /dialog close failed/)
+  assert.equal(contextCloses, 1)
 })

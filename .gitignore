@@ -23,6 +23,8 @@ output/
 logs/
 .deepspider-data/
 .deepspider-store/
+/ems_analysis/
+/evidence/
 **/settings.local.json
 settings.local.json
 .npmrc

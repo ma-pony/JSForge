@@ -27,6 +27,14 @@ const BROWSER_FACING_CONTRACTS = [
       description: 'Open or close the in-page DeepSpider Dialog',
     },
   }],
+  ['browser_session', {
+    action: {
+      type: 'string',
+      enum: ['keep', 'release'],
+      required: true,
+      description: 'Keep the live browser for follow-up work or release it now',
+    },
+  }],
   ['navigate_page', {
     url: { type: 'string', description: 'URL to navigate to' },
     reload: { type: 'boolean', default: false, description: 'Reload current page' },
@@ -302,8 +310,8 @@ test('browser-facing groups expose the complete frozen public name and parameter
   const groups = [browserTools, networkTools, debuggerTools, hookTools, stealthTools]
   const catalog = createToolCatalog(groups)
 
-  assert.equal(catalog.length, 45)
-  assert.equal(new Set(catalog.map(({ name }) => name)).size, 45)
+  assert.equal(catalog.length, 46)
+  assert.equal(new Set(catalog.map(({ name }) => name)).size, 46)
   assert.deepEqual(
     catalog.map(({ name, parameters }) => [name, parameters]),
     BROWSER_FACING_CONTRACTS,

@@ -67,6 +67,8 @@ test('Agent prompt keeps the reverse-engineering invariants concise and complete
   assert.match(prompt, /recovery-output-kind/)
   assert.match(prompt, /recover_target_output/i)
   assert.match(prompt, /recorded working-source transforms are allowed/i)
+  assert.match(prompt, /browser_session/i)
+  assert.match(prompt, /keep or release/i)
   assert.doesNotMatch(prompt, /Keep an immutable target; use Hook\/environment repair instead of changing target code/i)
 })
 

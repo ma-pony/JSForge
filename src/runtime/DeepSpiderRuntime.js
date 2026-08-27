@@ -108,6 +108,7 @@ export class DeepSpiderRuntime {
 
     this._browserPromise = null
     this._pendingBrowser = null
+    this._browserReleasePromise = null
     this._closePromise = null
     this._closed = false
     this._lifetime = new globalThis.AbortController()
@@ -116,6 +117,9 @@ export class DeepSpiderRuntime {
   async getBrowserClient({ signal } = {}) {
     throwIfAborted(signal)
     if (this._closed) throw abortError(this._lifetime.signal.reason || 'Runtime is closed')
+    if (this._browserReleasePromise) {
+      await waitFor(this._browserReleasePromise, { signal })
+    }
     if (this.browserClient) return this.browserClient
 
     if (!this._browserPromise) {
@@ -131,6 +135,33 @@ export class DeepSpiderRuntime {
     const client = await waitFor(this._browserPromise, { signal })
     throwIfAborted(signal)
     return client
+  }
+
+  async manageBrowserSession(action) {
+    if (action === 'keep') {
+      return {
+        action,
+        browser: this.browserClient || this._pendingBrowser || this._browserPromise
+          ? 'active'
+          : 'absent',
+      }
+    }
+    if (action !== 'release') {
+      throw new TypeError('Browser session action must be keep or release')
+    }
+    const released = await this.releaseBrowser('Agent released browser session')
+    return { action, browser: released ? 'released' : 'absent' }
+  }
+
+  releaseBrowser(reason) {
+    if (this._browserReleasePromise) return this._browserReleasePromise
+
+    const pending = this._releaseBrowser(reason)
+    const shared = pending.finally(() => {
+      if (this._browserReleasePromise === shared) this._browserReleasePromise = null
+    })
+    this._browserReleasePromise = shared
+    return shared
   }
 
   getRecoveryRuntime() {
@@ -320,6 +351,32 @@ export class DeepSpiderRuntime {
     }
   }
 
+  async _releaseBrowser(reason) {
+    let client = this.browserClient || this._pendingBrowser
+    if (this._browserPromise) {
+      try {
+        client = await this._browserPromise
+      } catch {
+        this._browserPromise = null
+        this.clearPageDerivedState()
+        return false
+      }
+    }
+
+    if (!client) {
+      this._browserPromise = null
+      this.clearPageDerivedState()
+      return false
+    }
+
+    await client.close(reason)
+    if (this.browserClient === client) this.browserClient = null
+    if (this._pendingBrowser === client) this._pendingBrowser = null
+    this._browserPromise = null
+    this.clearPageDerivedState()
+    return true
+  }
+
   async _closeOwnedResources(reason) {
     const errors = []
     if (this.recoveryRuntime) {
@@ -329,22 +386,10 @@ export class DeepSpiderRuntime {
         errors.push(error)
       }
     }
-    let client = this.browserClient || this._pendingBrowser
-
-    if (this._browserPromise) {
-      try {
-        client = await this._browserPromise
-      } catch {
-        client = null
-      }
-    }
-
-    if (client && typeof client.close === 'function') {
-      try {
-        await client.close(reason)
-      } catch (error) {
-        errors.push(error)
-      }
+    try {
+      await this.releaseBrowser(reason)
+    } catch (error) {
+      errors.push(error)
     }
 
     if (typeof this.dataStore?.close === 'function') {

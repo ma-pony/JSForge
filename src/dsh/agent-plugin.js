@@ -19,6 +19,7 @@ export function apply(ctx) {
       'Use pure algorithm recovery only as an explicit escalation after a program blocker or an explicit user request.',
       'When the output kind is ambiguous, use one native DSH question with id recovery-output-kind before calling recover_target_output.',
       'Preserve the captured original; recorded working-source transforms are allowed.',
+      'After using browser tools, call browser_session to keep or release the live browser before the final response; release it when live page state is no longer needed and keep it only for follow-up work.',
     ].join(' '),
   })
 }

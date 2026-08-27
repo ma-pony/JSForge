@@ -34,7 +34,7 @@ export class BrowserClient extends EventEmitter {
     this.dialogBridge = new DialogBridge({
       onMessage: (message) => this.onMessage?.(message),
     });
-    this._isCleaningUp = false;
+    this._cleanupPromise = null;
     // CDP session 健康检查节流
     this._cdpLastCheck = 0;
     this._cdpCheckInterval = 5000; // 5秒内不重复检查
@@ -325,58 +325,72 @@ export class BrowserClient extends EventEmitter {
   /**
    * 清理所有资源
    */
-  async cleanup() {
-    if (this._isCleaningUp) return;
-    this._isCleaningUp = true;
+  cleanup() {
+    if (this._cleanupPromise) return this._cleanupPromise;
 
-    try {
-      await this.closeDialog();
+    const pending = this._cleanupResources();
+    const shared = pending.finally(() => {
+      if (this._cleanupPromise === shared) this._cleanupPromise = null;
+    });
+    this._cleanupPromise = shared;
+    return shared;
+  }
 
-      // 停止拦截器
-      if (this.networkInterceptor) {
-        await this.networkInterceptor.stop?.().catch(() => {});
-        this.networkInterceptor = null;
+  async _cleanupResources() {
+    const errors = [];
+    const attempt = async (operation) => {
+      try {
+        await operation();
+      } catch (error) {
+        errors.push(error);
       }
-      if (this.scriptInterceptor) {
-        await this.scriptInterceptor.stop?.().catch(() => {});
-        this.scriptInterceptor = null;
-      }
-      if (this.antiDebugInterceptor) {
-        this.antiDebugInterceptor = null;
-      }
+    };
 
-      // 分离 CDP session
-      if (this.cdpSession) {
-        await this.cdpSession.detach().catch(() => {});
-        this.cdpSession = null;
-      }
+    await attempt(() => this.closeDialog());
 
-      // 关闭浏览器
-      if (this._persistent) {
-        // 持久化模式：关闭 context 即保存数据并关闭浏览器
-        if (this.context) {
-          await this.context.close();
-          this.context = null;
-          this.browser = null;
-          this.page = null;
-          this.pages = [];
-        }
-      } else if (this.browser) {
-        await this.browser.close();
-        this.browser = null;
-        this.context = null;
-        this.page = null;
-        this.pages = [];
-      }
+    if (this.networkInterceptor) {
+      await attempt(() => this.networkInterceptor.stop?.());
+      this.networkInterceptor = null;
+    }
+    if (this.scriptInterceptor) {
+      await attempt(() => this.scriptInterceptor.stop?.());
+      this.scriptInterceptor = null;
+    }
+    this.antiDebugInterceptor = null;
 
+    if (this.cdpSession) {
+      await attempt(() => this.cdpSession.detach());
+      this.cdpSession = null;
+    }
+
+    let browserClosed = true;
+    if (this._persistent && this.context) {
+      const errorCount = errors.length;
+      await attempt(() => this.context.close());
+      browserClosed = errors.length === errorCount;
+    } else if (!this._persistent && this.browser) {
+      const errorCount = errors.length;
+      await attempt(() => this.browser.close());
+      browserClosed = errors.length === errorCount;
+    }
+
+    if (browserClosed) {
+      this.context = null;
+      this.browser = null;
+      this.page = null;
+      this.pages = [];
       this.emit('closed');
-    } catch (e) {
-      this.emit('error', e);
-    } finally {
-      this._isCleaningUp = false;
-      // 重置 CDP 相关状态
-      this._cdpLastCheck = 0;
-      this._cdpSessionPage = null;
+    }
+
+    this._cdpLastCheck = 0;
+    this._cdpSessionPage = null;
+
+    if (errors.length > 0) {
+      const error = errors.length === 1
+        ? errors[0]
+        : new AggregateError(errors, 'Browser cleanup failed');
+      if (this.listenerCount('error') > 0) this.emit('error', error);
+      throw error;
     }
   }
 }
